@@ -1,91 +1,144 @@
 #!/usr/bin/env python
-from pathlib import Path
+from __future__ import annotations
 
+from datetime import datetime
+import os
+from pathlib import Path
+from typing import Any
+
+from dotenv import load_dotenv
 from pydantic import BaseModel
 
-from crewai.flow import Flow, listen, start
 
-from trading_agents.crews.content_crew.content_crew import ContentCrew
+load_dotenv()
+# Enable trace collection for this entry point unless the caller opted out.
+os.environ.setdefault("CREWAI_TRACING_ENABLED", "true")
+
+from crewai.flow import Flow, listen, start  # noqa: E402
+
+from trading_agents.crews.analyst_crew.analyst_crew import run_analyst_stage  # noqa: E402
+
+DEFAULT_TICKER = "NVDA"
+DEFAULT_TRADE_DATE = "2024-05-24"
+REPORT_FILES = {
+    "fundamentals_report": "fundamentals_report.md",
+    "sentiment_report": "sentiment_report.md",
+    "news_report": "news_report.md",
+    "market_report": "market_report.md",
+}
 
 
-class ContentState(BaseModel):
-    topic: str = ""
-    outline: str = ""
-    draft: str = ""
-    final_post: str = ""
+class TradingAgentsState(BaseModel):
+    ticker: str = DEFAULT_TICKER
+    trade_date: str = DEFAULT_TRADE_DATE
+    fundamentals_report: str = ""
+    sentiment_report: str = ""
+    news_report: str = ""
+    market_report: str = ""
+    output_dir: str = ""
 
 
-class ContentFlow(Flow[ContentState]):
-
+class TradingAgentsFlow(Flow[TradingAgentsState]):
     @start()
-    def plan_content(self, crewai_trigger_payload: dict = None):
-        print("Planning content")
+    def prepare_inputs(
+        self, crewai_trigger_payload: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        payload = _normalize_payload(crewai_trigger_payload)
+        ticker = str(payload.get("ticker") or self.state.ticker).strip().upper()
+        trade_date = str(payload.get("trade_date") or self.state.trade_date).strip()
 
-        if crewai_trigger_payload:
-            self.state.topic = crewai_trigger_payload.get("topic", "AI Agents")
-            print(f"Using trigger payload: {crewai_trigger_payload}")
-        else:
-            self.state.topic = "AI Agents"
+        _validate_ticker(ticker)
+        _validate_trade_date(trade_date)
 
-        print(f"Topic: {self.state.topic}")
+        self.state.ticker = ticker
+        self.state.trade_date = trade_date
+        self.state.output_dir = str(Path("output") / f"{ticker}_{trade_date}")
 
-    @listen(plan_content)
-    def generate_content(self):
-        print(f"Generating content on: {self.state.topic}")
-        result = (
-            ContentCrew()
-            .crew()
-            .kickoff(inputs={"topic": self.state.topic})
-        )
+        stage_inputs = dict(payload)
+        stage_inputs["ticker"] = ticker
+        stage_inputs["trade_date"] = trade_date
 
-        print("Content generated")
-        self.state.final_post = result.raw
+        print(f"Prepared analyst stage for {ticker} on {trade_date}")
+        return stage_inputs
 
-    @listen(generate_content)
-    def save_content(self):
-        print("Saving content")
-        output_dir = Path("output")
-        output_dir.mkdir(exist_ok=True)
-        with open(output_dir / "post.md", "w") as f:
-            f.write(self.state.final_post)
-        print("Post saved to output/post.md")
+    @listen(prepare_inputs)
+    def run_analysts(self, inputs: dict[str, Any]) -> dict[str, str]:
+        print(f"Running analyst stage for {self.state.ticker} on {self.state.trade_date}")
+        reports = run_analyst_stage(inputs)
 
+        self.state.fundamentals_report = reports["fundamentals_report"]
+        self.state.sentiment_report = reports["sentiment_report"]
+        self.state.news_report = reports["news_report"]
+        self.state.market_report = reports["market_report"]
 
-def kickoff():
-    content_flow = ContentFlow()
-    content_flow.kickoff()
+        print("Analyst stage complete")
+        return reports
 
-
-def plot():
-    content_flow = ContentFlow()
-    content_flow.plot()
+    @listen(run_analysts)
+    def save_outputs(self, _reports: dict[str, str]) -> dict[str, Any]:
+        output_dir = save_analyst_outputs(self.state)
+        print(f"Analyst reports saved to {output_dir}")
+        return self.state.model_dump()
 
 
-def run_with_trigger():
-    """
-    Run the flow with trigger payload.
-    """
+def kickoff() -> Any:
+    flow = TradingAgentsFlow(tracing=True)
+    return flow.kickoff()
+
+
+def plot() -> None:
+    flow = TradingAgentsFlow(tracing=True)
+    flow.plot()
+
+
+def run_with_trigger() -> Any:
     import json
     import sys
 
-    # Get trigger payload from command line argument
     if len(sys.argv) < 2:
         raise Exception("No trigger payload provided. Please provide JSON payload as argument.")
 
     try:
         trigger_payload = json.loads(sys.argv[1])
-    except json.JSONDecodeError:
-        raise Exception("Invalid JSON payload provided as argument")
+    except json.JSONDecodeError as exc:
+        raise Exception("Invalid JSON payload provided as argument") from exc
 
-    # Create flow and kickoff with trigger payload
-    # The @start() methods will automatically receive crewai_trigger_payload parameter
-    content_flow = ContentFlow()
-
+    flow = TradingAgentsFlow(tracing=True)
     try:
-        result = content_flow.kickoff({"crewai_trigger_payload": trigger_payload})
-        return result
-    except Exception as e:
-        raise Exception(f"An error occurred while running the flow with trigger: {e}")
+        return flow.kickoff(inputs={"crewai_trigger_payload": trigger_payload})
+    except Exception as exc:
+        raise Exception(f"An error occurred while running the flow with trigger: {exc}") from exc
+
+
+def save_analyst_outputs(state: TradingAgentsState) -> Path:
+    output_dir = Path(state.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for attribute, file_name in REPORT_FILES.items():
+        report = getattr(state, attribute)
+        (output_dir / file_name).write_text(report, encoding="utf-8")
+
+    return output_dir
+
+
+def _normalize_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise ValueError("crewai_trigger_payload must be a JSON object.")
+    return payload
+
+
+def _validate_ticker(ticker: str) -> None:
+    if ticker == "":
+        raise ValueError("ticker is required.")
+
+
+def _validate_trade_date(trade_date: str) -> None:
+    try:
+        datetime.strptime(trade_date, "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError("trade_date must use YYYY-MM-DD format.") from exc
 
 
 if __name__ == "__main__":

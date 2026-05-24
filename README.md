@@ -238,7 +238,7 @@ The output of this task is final trade decision.
 
 Crews are implemented as crew classes, which are decorated by @CrewBase. All agents and tasks are defined as member functions, one function decorated with @agent for one agent and one function decorated with @task for one task. The crew itself is also defined as a member function decorated with @crew. Besides, two separate agents.yaml and tasks.yaml files placed under the src/trading_agents/crews/[crew name]/config folder defines the actual prompts and other information. 
 
-This crew implementation - src/trading_agents/crews/content_crew, including content_crew.py, config/agents.yaml and config/tasks.yaml, serves the purpose of reference, not a part of the implementation of this project. By reading them, a coding agent can understand what implementation is expected. 
+The generated content_crew reference has been removed. Use the implemented src/trading_agents/crews/analyst_crew package as the current CrewAI wiring reference for this project.
 
 ### 1. Analyst Crew
 

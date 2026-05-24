@@ -5,3 +5,4 @@ lib/
 .agents
 .devcontainer
 skills-lock.json
+output/

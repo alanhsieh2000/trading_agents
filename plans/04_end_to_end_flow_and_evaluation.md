@@ -14,9 +14,10 @@ A user should be able to run the project with a trigger payload such as `{"ticke
 
 - [x] (2026-05-23 14:20Z) Read `README.md`, including the required five-stage flow and final output contract.
 - [x] (2026-05-23 14:20Z) Read the current `src/trading_agents/main.py`, which still defines a placeholder content-writing flow.
+- [x] (2026-05-24 08:12Z) Removed the generated `src/trading_agents/crews/content_crew` reference and replaced `main.py` with a traced analyst-stage `TradingAgentsFlow` so live runs now create CrewAI traces before the full plan 04 implementation.
 - [x] (2026-05-23 14:20Z) Read `tests/eval_cases/trading_agent_eval_cases.yaml` and noted the expected evidence categories, risk concerns, and unacceptable failure modes.
 - [ ] Ensure plans 01, 02, and 03 have been implemented.
-- [ ] Replace the placeholder content flow with `TradingAgentsFlow`.
+- [ ] Extend the current analyst-stage `TradingAgentsFlow` into the full end-to-end TradingAgents flow.
 - [ ] Add output persistence for every stage.
 - [ ] Add mocked end-to-end tests.
 - [ ] Add evaluation checks using `tests/eval_cases/trading_agent_eval_cases.yaml`.
@@ -69,7 +70,7 @@ This plan depends on the prior plans:
 - `plans/02_analyst_crew.md` for the four analyst reports.
 - `plans/03_debate_trader_risk_and_portfolio_crews.md` for research, trader, risk, and portfolio stage helpers.
 
-The current `src/trading_agents/main.py` is a content-writing example. It defines `ContentState`, `ContentFlow`, and functions `kickoff`, `plot`, and `run_with_trigger`. Replace the content-specific state and flow with trading-specific names and behavior.
+The current `src/trading_agents/main.py` defines `TradingAgentsState`, a traced `TradingAgentsFlow`, and functions `kickoff`, `plot`, and `run_with_trigger`. The interim flow runs the implemented analyst stage and writes four analyst report artifacts. Plan 04 still needs to extend this flow with research, trader, risk, portfolio, final output mapping, and evaluation checks.
 
 Definitions:
 
