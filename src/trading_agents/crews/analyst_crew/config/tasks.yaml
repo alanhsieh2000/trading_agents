@@ -1,0 +1,110 @@
+fundamentals_analysis:
+  name: fundamentals_analysis
+  description: >
+    Write the fundamentals report for stock ticker {ticker} for trade date
+    {trade_date}.
+
+    Research the company's fundamental information over the past week. Use
+    get_fundamentals for the company profile, basic financials, valuation
+    fields, and financial history. Use get_balance_sheet, get_cashflow, and
+    get_income_statement for specific financial statements. Focus on evidence
+    that can inform a trading decision, including financial strength,
+    profitability, valuation, liquidity, and any missing or stale data.
+
+    End the report with a markdown table of key signals.
+  expected_output: >
+    fundamentals report: a markdown report with sections for business profile,
+    financial strength, profitability and cash flow, valuation, evidence
+    limits, and a final markdown table of key signals.
+  agent: fundamentals_analyst
+  markdown: true
+
+sentiment_analysis:
+  name: sentiment_analysis
+  description: >
+    Write the sentiment report for stock ticker {ticker} for trade date
+    {trade_date}. The sentiment evidence covers {sentiment_start_date} through
+    {trade_date}.
+
+    Use only these pre-fetched evidence blocks. Do not call tools and do not
+    invent missing social-media evidence.
+
+    News headlines block:
+    {news_sentiment_block}
+
+    StockTwits block:
+    {stocktwits_block}
+
+    Reddit block:
+    {reddit_block}
+
+    Analyze overall sentiment direction, source-by-source evidence,
+    divergences or alignments across sources, recurring narratives, catalysts,
+    and risks. Be explicit when one of the blocks says no data is available or
+    when sample size is too small for high confidence.
+
+    End the report with a markdown table of key signals.
+  expected_output: >
+    sentiment report: a markdown report with overall sentiment direction,
+    source-by-source breakdown, divergences and narratives, catalysts and
+    risks, data-quality caveats, and a final markdown table of key sentiment
+    signals.
+  agent: sentiment_analyst
+  markdown: true
+
+news_analysis:
+  name: news_analysis
+  description: >
+    Write the news report for stock ticker {ticker} for trade date
+    {trade_date}.
+
+    Use get_news with ticker {ticker} and a recent date range ending on
+    {trade_date} to retrieve company-specific or targeted news. Use
+    get_global_news with curr_date {trade_date} to retrieve broader
+    macroeconomic news. Evaluate which company-specific, sector, market, and
+    macro headlines are most relevant to a trading decision. Separate
+    confirmed events from interpretation, and call out stale, sparse, or
+    source-limited data.
+
+    End the report with a markdown table of key signals.
+  expected_output: >
+    news report: a markdown report covering recent company-specific news,
+    relevant macroeconomic news, trading catalysts, risks, source limitations,
+    and a final markdown table of key news signals.
+  agent: news_analyst
+  markdown: true
+
+market_analysis:
+  name: market_analysis
+  description: >
+    Write the market report for stock ticker {ticker} for trade date
+    {trade_date}.
+
+    Call get_stock_data first to retrieve the price and volume CSV needed for
+    analysis. Then call get_indicators with up to eight complementary
+    indicators selected from this exact allowed list:
+    close_50_sma, close_200_sma, close_10_ema, macd, macds, macdh, rsi, boll,
+    boll_ub, boll_lb, atr, vwma.
+
+    Indicator guidance:
+    - Moving averages: close_50_sma, close_200_sma, close_10_ema for trend,
+      support, resistance, and fast momentum shifts.
+    - MACD family: macd, macds, macdh for trend-change momentum and crossover
+      confirmation.
+    - Momentum: rsi for overbought, oversold, and divergence analysis.
+    - Volatility: boll, boll_ub, boll_lb, atr for breakouts, reversals, and
+      stop or position-size context.
+    - Volume: vwma for confirming price trends with volume participation.
+
+    Use exact indicator names or the tool call will fail. Choose indicators
+    that provide diverse, non-redundant evidence. Write a detailed analysis of
+    trend, momentum, volatility, volume, and notable conflicts between signals.
+
+    End the report with a markdown table of key signals.
+  expected_output: >
+    market report: a markdown technical analysis report covering price action,
+    selected indicators and why they were chosen, trend, momentum, volatility,
+    volume, data limitations, and a final markdown table of key technical
+    signals.
+  agent: market_analyst
+  markdown: true

@@ -21,6 +21,7 @@ A user should be able to run the project with a trigger payload such as `{"ticke
 - [ ] Add mocked end-to-end tests.
 - [ ] Add evaluation checks using `tests/eval_cases/trading_agent_eval_cases.yaml`.
 - [ ] Run the final smoke tests and record outputs here.
+- [ ] Apply the runtime conventions proven in plan 02 and required by plan 03: load `.env` with `load_dotenv()` before live execution, preserve `gpt-4o-mini` as the default agent LLM in crew YAML, and enable tracing on the flow and every crew invocation.
 
 ## Surprises & Discoveries
 
@@ -30,6 +31,10 @@ A user should be able to run the project with a trigger payload such as `{"ticke
   Evidence: `tests/eval_cases/trading_agent_eval_cases.yaml` contains cases such as `nvda_2024_05_24`, `tsla_2024_04_24`, and `ba_2024_01_08`.
 - Observation: The flow output contract is intentionally narrower than the internal decision artifacts.
   Evidence: README says the Flow output is `Hold` if the Portfolio Crew rejects, otherwise the Trader Crew output.
+- Observation: Plan 02 established runtime conventions that the final flow must preserve.
+  Evidence: The analyst stage now loads `.env` explicitly with `load_dotenv()`, sets analyst agents to `llm: gpt-4o-mini`, enables Crew-level tracing, and parallelizes the independent analyst stage outside a single multi-terminal-async Crew because CrewAI rejects more than one terminal async task.
+- Observation: CrewAI tracing is a Crew/Flow setting, not a Task setting.
+  Evidence: The official CrewAI tracing docs show `Crew(..., tracing=True)` and `Flow(..., tracing=True)`; local CrewAI 1.14.5 exposes `tracing` on `Crew.model_fields` but not on `Task.model_fields`.
 
 ## Decision Log
 
@@ -42,6 +47,15 @@ A user should be able to run the project with a trigger payload such as `{"ticke
 - Decision: Save intermediate outputs under `output/{ticker}_{trade_date}/`.
   Rationale: Users need to inspect how the final decision was reached, and per-run directories prevent overwriting unrelated ticker/date analyses.
   Date/Author: 2026-05-23 / Codex
+- Decision: Initialize the final `TradingAgentsFlow` with tracing enabled.
+  Rationale: CrewAI tracing belongs on Flow or Crew objects, and the end-to-end orchestration is where cross-stage debugging is most useful.
+  Date/Author: 2026-05-24 / Codex
+- Decision: Import `load_dotenv` and call `load_dotenv()` in `src/trading_agents/main.py` before live flow execution.
+  Rationale: The flow and its stage helpers need `OPENAI_API_KEY` loaded before any CrewAI kickoff, and plan 02 proved explicit dotenv loading works.
+  Date/Author: 2026-05-24 / Codex
+- Decision: Keep `gpt-4o-mini` as the default LLM by relying on each crew's `agents.yaml`, rather than setting a competing model in the flow.
+  Rationale: Model selection is an agent-level CrewAI concern, and keeping it in YAML matches the analyst crew and future decision crew conventions.
+  Date/Author: 2026-05-24 / Codex
 
 ## Outcomes & Retrospective
 
@@ -63,7 +77,9 @@ The final trade decision is the Portfolio Crew's exact `approve` or `reject` val
 
 ## Plan of Work
 
-First, define a `TradingAgentsState` Pydantic model in `src/trading_agents/main.py` or import it from `src/trading_agents/schemas.py`. It should include at least:
+First, import `load_dotenv` from `dotenv` in `src/trading_agents/main.py` and call `load_dotenv()` before creating or kicking off the flow. The flow implementation must enable tracing with `TradingAgentsFlow(tracing=True)` or an equivalent `super().__init__(tracing=True)` pattern. Do not add tracing to tasks. Keep `gpt-4o-mini` as the default LLM through each crew's `agents.yaml`; the flow should not override that agent-level setting unless the user explicitly requests a model change.
+
+Then, define a `TradingAgentsState` Pydantic model in `src/trading_agents/main.py` or import it from `src/trading_agents/schemas.py`. It should include at least:
 
     ticker: str = "NVDA"
     trade_date: str = "2024-05-24"
@@ -163,7 +179,15 @@ Run commands from `/app/trading_agents`.
        Final output: Hold
        Output directory: output/NVDA_2024-05-24
 
-7. With valid `OPENAI_API_KEY` and network access, run the actual flow:
+7. Before a live run, confirm `.env` loads the OpenAI key:
+
+       uv run python -c "from dotenv import load_dotenv; load_dotenv(); import os; print('OPENAI_API_KEY set' if os.getenv('OPENAI_API_KEY') else 'OPENAI_API_KEY missing')"
+
+   Expected output:
+
+       OPENAI_API_KEY set
+
+8. With valid `OPENAI_API_KEY` and network access, run the actual flow:
 
        uv run run_with_trigger '{"ticker":"NVDA","trade_date":"2024-05-24"}'
 
@@ -244,3 +268,5 @@ At the end of this plan, these commands should work:
 The main flow should import only stage helper functions, not individual agent internals. This keeps `main.py` responsible for orchestration and each crew responsible for its own prompts, tasks, and implementation details.
 
 Revision Note: 2026-05-23 14:20Z Initial ExecPlan drafted after reading the README flow contract, current placeholder `main.py`, CrewAI flow guidance, and the available evaluation cases. This plan intentionally makes mocked validation mandatory before live LLM execution.
+
+Revision Note: 2026-05-24 06:57Z Added plan 02 runtime conventions to the unimplemented end-to-end flow: explicit dotenv loading before live runs, preserve `gpt-4o-mini` in crew YAML as the default LLM, and enable tracing on Flow/Crew objects rather than Task objects.
