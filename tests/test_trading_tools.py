@@ -4,8 +4,10 @@ from trading_agents.tools import (
     fetch_reddit_posts,
     fetch_stocktwits_messages,
     get_balance_sheet,
+    get_cashflow,
     get_fundamentals,
     get_global_news,
+    get_income_statement,
     get_indicators,
     get_news,
     get_stock_data,
@@ -53,10 +55,13 @@ def test_stock_data_formats_history(monkeypatch):
         "progress": False,
         "auto_adjust": False,
     }
-    assert "Stock data for AAPL from 2024-01-01 to 2024-01-03." in result
-    assert "Rows covered: 2." in result
-    assert "date,open,high,low,close,adj_close,volume" in result
-    assert "2024-01-02,102,104,101,103,103,1200" in result
+    assert result == (
+        "Stock data for AAPL from 2024-01-01 to 2024-01-03.\n"
+        "Rows covered: 2.\n"
+        "date,open,high,low,close,adj_close,volume\n"
+        "2024-01-01,101,103,100,102,102,1100\n"
+        "2024-01-02,102,104,101,103,103,1200"
+    )
 
 
 def test_stock_data_empty_response(monkeypatch):
@@ -93,10 +98,42 @@ def test_indicators_format_requested_values(monkeypatch):
         "close_10_ema, rsi",
     )
 
-    assert "Technical indicators for AAPL from 2024-01-01 to 2024-02-01." in result
-    assert "Requested indicators: close_10_ema, rsi." in result
-    assert "date,close,close_10_ema,rsi" in result
-    assert "2024-01-30" in result
+    assert result == (
+        "Technical indicators for AAPL from 2024-01-01 to 2024-02-01.\n"
+        "Rows covered: 30.\n"
+        "Requested indicators: close_10_ema, rsi.\n"
+        "date,close,close_10_ema,rsi\n"
+        "2024-01-01,102,102,50\n"
+        "2024-01-02,103,102.55,100\n"
+        "2024-01-03,104,103.1329,100\n"
+        "2024-01-04,105,103.748,100\n"
+        "2024-01-05,106,104.3945,100\n"
+        "2024-01-06,107,105.0712,100\n"
+        "2024-01-07,108,105.777,100\n"
+        "2024-01-08,109,106.5102,100\n"
+        "2024-01-09,110,107.2695,100\n"
+        "2024-01-10,111,108.0531,100\n"
+        "2024-01-11,112,108.8594,100\n"
+        "2024-01-12,113,109.6867,100\n"
+        "2024-01-13,114,110.5333,100\n"
+        "2024-01-14,115,111.3974,100\n"
+        "2024-01-15,116,112.2777,100\n"
+        "2024-01-16,117,113.1723,100\n"
+        "2024-01-17,118,114.0801,100\n"
+        "2024-01-18,119,114.9994,100\n"
+        "2024-01-19,120,115.9291,100\n"
+        "2024-01-20,121,116.8681,100\n"
+        "2024-01-21,122,117.8152,100\n"
+        "2024-01-22,123,118.7694,100\n"
+        "2024-01-23,124,119.7299,100\n"
+        "2024-01-24,125,120.6959,100\n"
+        "2024-01-25,126,121.6668,100\n"
+        "2024-01-26,127,122.6417,100\n"
+        "2024-01-27,128,123.6203,100\n"
+        "2024-01-28,129,124.602,100\n"
+        "2024-01-29,130,125.5864,100\n"
+        "2024-01-30,131,126.5731,100"
+    )
 
 
 def test_fundamentals_profile_reports_missing_fields(monkeypatch):
@@ -114,15 +151,20 @@ def test_fundamentals_profile_reports_missing_fields(monkeypatch):
 
     result = get_fundamentals._run("aapl")
 
-    assert "Fundamentals for AAPL." in result
-    assert "Company: Apple Inc." in result
-    assert "Sector: Technology" in result
-    assert "Market capitalization: 3000000000000" in result
-    assert "Missing fields:" in result
-    assert "Forward PE" in result
+    assert result == (
+        "Fundamentals for AAPL.\n"
+        "Company: Apple Inc.\n"
+        "Ticker: AAPL\n"
+        "Sector: Technology\n"
+        "Industry: Consumer Electronics\n"
+        "Market capitalization: 3000000000000\n"
+        "Trailing PE: 31.25\n"
+        "Missing fields: Currency, Current price, Forward PE, Price to book, Enterprise value, "
+        "Trailing EPS, Forward EPS, Dividend yield, Beta."
+    )
 
 
-def test_statement_formatting(monkeypatch):
+def test_financial_statement_outputs(monkeypatch):
     class FakeTicker:
         balance_sheet = pd.DataFrame(
             {
@@ -131,17 +173,44 @@ def test_statement_formatting(monkeypatch):
             },
             index=["Total Assets", "Total Liab"],
         )
-        cashflow = pd.DataFrame()
-        income_stmt = pd.DataFrame()
+        cashflow = pd.DataFrame(
+            {
+                pd.Timestamp("2024-12-31"): [250, 125],
+                pd.Timestamp("2023-12-31"): [200, 100],
+            },
+            index=["Operating Cash Flow", "Capital Expenditure"],
+        )
+        income_stmt = pd.DataFrame(
+            {
+                pd.Timestamp("2024-12-31"): [500, 75],
+                pd.Timestamp("2023-12-31"): [450, 70],
+            },
+            index=["Total Revenue", "Net Income"],
+        )
 
     monkeypatch.setattr(fundamentals.yf, "Ticker", lambda ticker: FakeTicker())
 
-    result = get_balance_sheet._run("AAPL")
-
-    assert "Balance sheet for AAPL." in result
-    assert "Rows covered: 2. Periods covered: 2." in result
-    assert "line_item,2024-12-31,2023-12-31" in result
-    assert "Total Assets,1000,900" in result
+    assert get_balance_sheet._run("AAPL") == (
+        "Balance sheet for AAPL.\n"
+        "Rows covered: 2. Periods covered: 2.\n"
+        "line_item,2024-12-31,2023-12-31\n"
+        "Total Assets,1000,900\n"
+        "Total Liab,400,350"
+    )
+    assert get_cashflow._run("AAPL") == (
+        "Cash flow statement for AAPL.\n"
+        "Rows covered: 2. Periods covered: 2.\n"
+        "line_item,2024-12-31,2023-12-31\n"
+        "Operating Cash Flow,250,200\n"
+        "Capital Expenditure,125,100"
+    )
+    assert get_income_statement._run("AAPL") == (
+        "Income statement for AAPL.\n"
+        "Rows covered: 2. Periods covered: 2.\n"
+        "line_item,2024-12-31,2023-12-31\n"
+        "Total Revenue,500,450\n"
+        "Net Income,75,70"
+    )
 
 
 def test_news_formats_and_filters(monkeypatch):
