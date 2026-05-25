@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -29,10 +28,10 @@ load_dotenv()
 
 
 REPORT_TASK_TO_KEY = {
-    "fundamentals_analysis": "fundamentals_report",
+    "market_analysis": "market_report",
     "sentiment_analysis": "sentiment_report",
     "news_analysis": "news_report",
-    "market_analysis": "market_report",
+    "fundamentals_analysis": "fundamentals_report",
 }
 ANALYST_TASK_NAMES = tuple(REPORT_TASK_TO_KEY)
 
@@ -48,9 +47,34 @@ class AnalystCrew:
     tasks_config = "config/tasks.yaml"
 
     @agent
-    def fundamentals_analyst(self) -> Agent:
-        return Agent(
-            config=self.agents_config["fundamentals_analyst"],  # type: ignore[index]
+    def analyst(self) -> Agent:
+        return Agent(config=self.agents_config["analyst"])  # type: ignore[index]
+
+    @task
+    def market_analysis(self) -> Task:
+        return Task(
+            config=self.tasks_config["market_analysis"],  # type: ignore[index]
+            tools=[get_stock_data, get_indicators],
+        )
+
+    @task
+    def sentiment_analysis(self) -> Task:
+        return Task(
+            config=self.tasks_config["sentiment_analysis"],  # type: ignore[index]
+            tools=[],
+        )
+
+    @task
+    def news_analysis(self) -> Task:
+        return Task(
+            config=self.tasks_config["news_analysis"],  # type: ignore[index]
+            tools=[get_news, get_global_news],
+        )
+
+    @task
+    def fundamentals_analysis(self) -> Task:
+        return Task(
+            config=self.tasks_config["fundamentals_analysis"],  # type: ignore[index]
             tools=[
                 get_fundamentals,
                 get_balance_sheet,
@@ -59,57 +83,17 @@ class AnalystCrew:
             ],
         )
 
-    @agent
-    def sentiment_analyst(self) -> Agent:
-        return Agent(
-            config=self.agents_config["sentiment_analyst"],  # type: ignore[index]
-            tools=[],
-        )
-
-    @agent
-    def news_analyst(self) -> Agent:
-        return Agent(
-            config=self.agents_config["news_analyst"],  # type: ignore[index]
-            tools=[get_news, get_global_news],
-        )
-
-    @agent
-    def market_analyst(self) -> Agent:
-        return Agent(
-            config=self.agents_config["market_analyst"],  # type: ignore[index]
-            tools=[get_stock_data, get_indicators],
-        )
-
-    @task
-    def fundamentals_analysis(self) -> Task:
-        return Task(
-            config=self.tasks_config["fundamentals_analysis"],  # type: ignore[index]
-        )
-
-    @task
-    def sentiment_analysis(self) -> Task:
-        return Task(
-            config=self.tasks_config["sentiment_analysis"],  # type: ignore[index]
-        )
-
-    @task
-    def news_analysis(self) -> Task:
-        return Task(
-            config=self.tasks_config["news_analysis"],  # type: ignore[index]
-        )
-
-    @task
-    def market_analysis(self) -> Task:
-        return Task(
-            config=self.tasks_config["market_analysis"],  # type: ignore[index]
-        )
-
     @crew
     def crew(self) -> Crew:
         """Creates the analyst crew."""
         return Crew(
-            agents=self.agents,
-            tasks=self.tasks,
+            agents=[self.analyst()],
+            tasks=[
+                self.market_analysis(),
+                self.sentiment_analysis(),
+                self.news_analysis(),
+                self.fundamentals_analysis(),
+            ],
             process=Process.sequential,
             tracing=True,
             verbose=True,
@@ -117,56 +101,36 @@ class AnalystCrew:
 
 
 def run_analyst_stage(inputs: Mapping[str, Any]) -> dict[str, str]:
-    """Run the analyst stage in parallel and return all reports by stable key."""
+    """Run the analyst stage sequentially and return all reports by stable key."""
     prepared_inputs = prepare_analyst_inputs(inputs)
-    task_outputs = run_parallel_analyst_tasks(prepared_inputs)
-    result = CrewOutput(raw=task_outputs[-1].raw, tasks_output=task_outputs)
+    result = AnalystCrew().crew().kickoff(inputs=prepared_inputs)
     return extract_analyst_reports(result)
 
 
-def run_parallel_analyst_tasks(inputs: Mapping[str, Any]):
-    """Execute the four independent analyst tasks concurrently."""
-    with ThreadPoolExecutor(max_workers=len(ANALYST_TASK_NAMES)) as executor:
-        return list(
-            executor.map(
-                lambda task_name: _run_single_analyst_task(task_name, inputs),
-                ANALYST_TASK_NAMES,
-            )
-        )
-
-
-def _run_single_analyst_task(task_name: str, inputs: Mapping[str, Any]):
-    crew_source = AnalystCrew()
-    task_instance = getattr(crew_source, task_name)()
-    if task_instance.agent is None:
-        raise ValueError(f"Analyst task {task_name!r} has no agent assigned.")
-
-    result = Crew(
-        agents=[task_instance.agent],
-        tasks=[task_instance],
-        process=Process.sequential,
-        tracing=True,
-        verbose=True,
-    ).kickoff(inputs=dict(inputs))
-    if not result.tasks_output:
-        raise ValueError(f"Analyst task {task_name!r} produced no output.")
-    return result.tasks_output[0]
-
-
 def prepare_analyst_inputs(inputs: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalize analyst-stage inputs and prefetch sentiment prompt blocks."""
+    """Normalize analyst-stage inputs and prefetch prompt-only evidence blocks."""
     ticker = _required_string(inputs, "ticker").upper()
-    trade_date = _required_string(inputs, "trade_date")
-    start_date = str(inputs.get("sentiment_start_date") or _seven_days_back(trade_date))
+    current_date = _current_date(inputs)
+    start_date = _days_back(current_date, days=7)
 
     prepared = dict(inputs)
     prepared["ticker"] = ticker
-    prepared["trade_date"] = trade_date
+    prepared["trade_date"] = current_date
+    prepared["current_date"] = current_date
+    prepared["start_date"] = start_date
+    prepared["end_date"] = current_date
     prepared["sentiment_start_date"] = start_date
+    prepared["asset_label"] = str(inputs.get("asset_label") or ticker)
+
+    if "news_block" in prepared and "news_sentiment_block" not in prepared:
+        prepared["news_sentiment_block"] = prepared["news_block"]
     if "news_sentiment_block" not in prepared:
         prepared["news_sentiment_block"] = get_news._run(
-            ticker, start_date, trade_date, limit=10
+            ticker, start_date, current_date, limit=10
         )
+    if "news_block" not in prepared:
+        prepared["news_block"] = prepared["news_sentiment_block"]
+
     if "stocktwits_block" not in prepared:
         prepared["stocktwits_block"] = fetch_stocktwits_messages(ticker, limit=30)
     if "reddit_block" not in prepared:
@@ -189,11 +153,24 @@ def extract_analyst_reports(result: CrewOutput) -> dict[str, str]:
             reports[report_key] = str(getattr(task_output, "raw", "") or "")
 
     ordered_report_keys = list(REPORT_TASK_TO_KEY.values())
-    missing = [report_key for report_key in ordered_report_keys if report_key not in reports]
+    missing = [
+        report_key for report_key in ordered_report_keys if report_key not in reports
+    ]
     if missing:
         raise ValueError(f"Analyst crew output missing reports: {', '.join(missing)}")
 
     return {report_key: reports[report_key] for report_key in ordered_report_keys}
+
+
+def _current_date(inputs: Mapping[str, Any]) -> str:
+    value = inputs.get("current_date") or inputs.get("trade_date")
+    if value is None or str(value).strip() == "":
+        raise ValueError(
+            "Analyst stage input 'current_date' or 'trade_date' is required."
+        )
+    current_date = str(value).strip()
+    _parse_yyyy_mm_dd(current_date)
+    return current_date
 
 
 def _required_string(inputs: Mapping[str, Any], key: str) -> str:
@@ -203,7 +180,9 @@ def _required_string(inputs: Mapping[str, Any], key: str) -> str:
     return str(value).strip()
 
 
-def _seven_days_back(trade_date: str) -> str:
-    return (datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=7)).strftime(
-        "%Y-%m-%d"
-    )
+def _days_back(current_date: str, days: int) -> str:
+    return (_parse_yyyy_mm_dd(current_date) - timedelta(days=days)).strftime("%Y-%m-%d")
+
+
+def _parse_yyyy_mm_dd(value: str) -> datetime:
+    return datetime.strptime(value, "%Y-%m-%d")

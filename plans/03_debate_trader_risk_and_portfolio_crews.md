@@ -33,7 +33,7 @@ This plan implements the core TradingAgents decision chain after market analysis
 - Observation: The upstream Research Manager and Portfolio Manager use a five-level rating scale, but this project README requires the final Portfolio Crew output to be exactly `approve` or `reject`.
   Evidence: README says Portfolio Crew output is final trade decision, exactly a single word, either `approve` or `reject`.
 - Observation: Plan 02 established project runtime conventions for future crews.
-  Evidence: `analyst_crew.py` now imports `load_dotenv` and calls `load_dotenv()` before live kickoff, each analyst in `agents.yaml` uses `llm: gpt-4o-mini`, and all Crew instances are constructed with `tracing=True`.
+  Evidence: `analyst_crew.py` now imports `load_dotenv` and calls `load_dotenv()` before live kickoff, the shared `analyst` entry in `agents.yaml` uses `llm: gpt-4o-mini`, tools are assigned at the task level, and Crew instances are constructed with `tracing=True`.
 - Observation: CrewAI tracing is configured on `Crew` or `Flow`, not on `Task`.
   Evidence: The official tracing docs show `Crew(..., tracing=True)` and `Flow(..., tracing=True)`, and local CrewAI 1.14.5 introspection found `tracing` on `Crew.model_fields` but not `Task.model_fields`.
 

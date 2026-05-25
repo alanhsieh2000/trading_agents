@@ -22,7 +22,7 @@ A user should be able to run the project with a trigger payload such as `{"ticke
 - [ ] Add mocked end-to-end tests.
 - [ ] Add evaluation checks using `tests/eval_cases/trading_agent_eval_cases.yaml`.
 - [ ] Run the final smoke tests and record outputs here.
-- [ ] Apply the runtime conventions proven in plan 02 and required by plan 03: load `.env` with `load_dotenv()` before live execution, preserve `gpt-4o-mini` as the default agent LLM in crew YAML, and enable tracing on the flow and every crew invocation.
+- [ ] Apply the runtime conventions proven in plan 02 and required by plan 03: load `.env` with `load_dotenv()` before live execution, preserve `gpt-4o-mini` as the default agent LLM in crew YAML, use task-level tools when one agent performs tool-specific tasks, and enable tracing on the flow and every crew invocation.
 
 ## Surprises & Discoveries
 
@@ -33,7 +33,7 @@ A user should be able to run the project with a trigger payload such as `{"ticke
 - Observation: The flow output contract is intentionally narrower than the internal decision artifacts.
   Evidence: README says the Flow output is `Hold` if the Portfolio Crew rejects, otherwise the Trader Crew output.
 - Observation: Plan 02 established runtime conventions that the final flow must preserve.
-  Evidence: The analyst stage now loads `.env` explicitly with `load_dotenv()`, sets analyst agents to `llm: gpt-4o-mini`, enables Crew-level tracing, and parallelizes the independent analyst stage outside a single multi-terminal-async Crew because CrewAI rejects more than one terminal async task.
+  Evidence: The analyst stage now loads `.env` explicitly with `load_dotenv()`, sets the shared analyst agent to `llm: gpt-4o-mini`, enables Crew-level tracing, runs analyst tasks sequentially, assigns tools at the task level, and maps the flow compatibility field `trade_date` to the analyst prompt variable `current_date`.
 - Observation: CrewAI tracing is a Crew/Flow setting, not a Task setting.
   Evidence: The official CrewAI tracing docs show `Crew(..., tracing=True)` and `Flow(..., tracing=True)`; local CrewAI 1.14.5 exposes `tracing` on `Crew.model_fields` but not on `Task.model_fields`.
 
@@ -98,7 +98,7 @@ Then, define a `TradingAgentsState` Pydantic model in `src/trading_agents/main.p
 Second, define `TradingAgentsFlow(Flow[TradingAgentsState])`. Keep the flow stages readable and one-purpose:
 
 1. `prepare_inputs`: a `@start()` method that reads `ticker` and `trade_date` from `crewai_trigger_payload` when present, validates the date format, normalizes ticker to upper-case, and sets `output_dir`.
-2. `run_analysts`: a `@listen(prepare_inputs)` method that calls `run_analyst_stage` and writes the four reports into state.
+2. `run_analysts`: a `@listen(prepare_inputs)` method that calls `run_analyst_stage` and writes the four reports into state. The flow may keep accepting `trade_date`, but the analyst stage maps it to `current_date` for YAML prompt interpolation.
 3. `run_research`: calls `run_research_stage` and writes `investment_plan`.
 4. `run_trader`: calls `run_trader_stage` and writes `trader_plan`.
 5. `run_risk_management`: calls `run_risk_stage` and writes `risk_debate_history`.

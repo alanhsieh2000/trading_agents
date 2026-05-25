@@ -55,20 +55,15 @@ Final Decision
 
 ## Agents
 
-Agents are implemented as Agent instances within respective crew classes, which are decorated by @CrewBase. Their roles, goals, and backstories are defined in a separate agents.yaml file placed under the src/trading_agents/crews/[crew name]/config folder. This is the folder for the crew that the agent belongs to. 
+Agents are implemented as Agent instances within respective crew classes, which are decorated by @CrewBase. Their roles, goals, and backstories are defined in a separate agents.yaml file placed under the src/trading_agents/crews/[crew name]/config folder. This is the folder for the crew that the agent belongs to.
 
-In the below sub-sections, there is one URL for each agent. By reading it, we can extract:
-- role
-- goal
-- backstory
-- tools
-and put them to respective agents.yaml. The project goal is to replicate the original work, so we must keep these prompts and tools as close to the original ones as possible, including tool names.
+The Analyst Crew is the exception to the one-upstream-agent-to-one-CrewAI-agent mapping. It now follows PROMPTS.md: one shared `analyst` agent performs the four analyst tasks sequentially, and tools are attached to tasks rather than to the agent. The upstream analyst URLs below are still prompt source material for the task descriptions and tool choices.
 
 ### 1. Analyst Team
 
 The Analyst Team performs the first stage of information gathering and market
-interpretation. Each analyst should produce a focused report from a specific
-perspective.
+interpretation. In this CrewAI implementation, one shared Analyst agent produces
+focused reports from four task-specific perspectives.
 
 #### Fundamentals Analyst
 
@@ -139,24 +134,20 @@ Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/ag
 
 ## Tasks
 
-Tasks are implemented as Task instances within respective crew classes, which are decorated by @CrewBase. Their description, expected output, and bond agent are defined in a separate tasks.yaml file placed under the src/trading_agents/crews/[crew name]/config folder. This is the folder for the crew that the agent belongs to. 
+Tasks are implemented as Task instances within respective crew classes, which are decorated by @CrewBase. Their description, expected output, and bound agent are defined in a separate tasks.yaml file placed under the src/trading_agents/crews/[crew name]/config folder. This is the folder for the crew that the task belongs to.
 
-In the below sub-sections, there is one URL for each agent. By reading it, we can extract:
-- description
-- expected_output
-- agent
-and put them to respective tasks.yaml. The project goal is to replicate the original work, so we must keep these prompts as close to the original ones as possible. The name of the agent should be exactly the same as the bond agent defined in the agents.yaml in the same folder.
+For the Analyst Crew, all four tasks bind to the same `analyst` agent. Tool access is configured in `analyst_crew.py` on each Task constructor so the shared agent can use different tools for market, sentiment, news, and fundamentals work.
 
 ### 1. Analyst Team
 
 The Analyst Team performs the first stage of information gathering and market
-interpretation. Four tasks are processed in parallel by four agents.
+interpretation. Four tasks are processed sequentially by one shared Analyst agent.
 
-#### Fundamentals Analysis
+#### Market Analysis
 
-Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/analysts/fundamentals_analyst.py"
+Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/analysts/market_analyst.py"
 
-The output of this task is fundamentals report.
+The output of this task is market report.
 
 #### Sentiment Analysis
 
@@ -170,11 +161,11 @@ Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/ag
 
 The output of this task is news report.
 
-#### Market Analysis
+#### Fundamentals Analysis
 
-Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/analysts/market_analyst.py"
+Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/analysts/fundamentals_analyst.py"
 
-The output of this task is market report.
+The output of this task is fundamentals report.
 
 ### 2. Research Team
 
@@ -242,23 +233,25 @@ The generated content_crew reference has been removed. Use the implemented src/t
 
 ### 1. Analyst Crew
 
-This crew consists of four agents and four tasks:
-- Fundamentals Analyst for Fundamentals Analysis
-- Sentiment Analyst for Sentiment Analysis
-- News Analyst for News Analysis
-- Market Analyst for Market Analysis
+This crew consists of one Analyst agent and four tasks, run sequentially:
+- Analyst for Market Analysis
+- Analyst for Sentiment Analysis
+- Analyst for News Analysis
+- Analyst for Fundamentals Analysis
 
-These four agents can do their task in parallel.
+Tools are bound to tasks rather than to the shared agent. Market Analysis gets price and indicator tools, Sentiment Analysis uses pre-fetched prompt blocks and no tools, News Analysis gets news tools, and Fundamentals Analysis gets fundamentals and financial-statement tools.
 
 The input to this crew is:
 - stock ticker
-- date
+- current date
+
+The Analyst Crew YAML uses `{current_date}` as the prompt date. The current flow trigger still accepts `trade_date` for compatibility and maps it to `current_date` before kicking off the crew. The crew derives `{end_date}` from `{current_date}` and derives `{start_date}` and `{sentiment_start_date}` as seven calendar days before `{current_date}`, matching the past-week language in the analyst prompts.
 
 The outputs of this crew are:
-- fundamentals report
+- market report
 - sentiment report
 - news report
-- market report
+- fundamentals report
 
 ### 2. Research Crew
 
