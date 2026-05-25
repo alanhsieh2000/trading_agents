@@ -32,7 +32,8 @@ RUN apt-get update && \
     libatomic1 \
     sqlite3 \
     curl \
-    libsqlite3-dev && \
+    libsqlite3-dev \
+    bubblewrap && \
     rm -rf /var/lib/apt/lists/*
 
 # install codex
