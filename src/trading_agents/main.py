@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 import os
 from pathlib import Path
 from typing import Any
@@ -19,7 +19,7 @@ from crewai.flow import Flow, listen, start  # noqa: E402
 from trading_agents.crews.analyst_crew.analyst_crew import run_analyst_stage  # noqa: E402
 
 DEFAULT_TICKER = "NVDA"
-DEFAULT_TRADE_DATE = "2024-05-24"
+DEFAULT_TRADE_DATE = datetime.now(UTC).strftime("%Y-%m-%d")
 REPORT_FILES = {
     "fundamentals_report": "fundamentals_report.md",
     "sentiment_report": "sentiment_report.md",

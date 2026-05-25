@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -61,10 +62,12 @@ def test_kickoff_uses_default_trading_inputs(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
     result = main_module.kickoff()
+    expected_trade_date = datetime.now(UTC).strftime("%Y-%m-%d")
 
     assert captured_inputs["ticker"] == main_module.DEFAULT_TICKER
     assert captured_inputs["trade_date"] == main_module.DEFAULT_TRADE_DATE
-    assert result["output_dir"] == "output/NVDA_2024-05-24"
+    assert captured_inputs["trade_date"] == expected_trade_date
+    assert result["output_dir"] == f"output/NVDA_{expected_trade_date}"
 
 
 def test_invalid_trade_date_stops_before_analyst_stage(monkeypatch):
