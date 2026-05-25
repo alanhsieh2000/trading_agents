@@ -46,7 +46,7 @@ class GetGlobalNewsTool(BaseTool):
     name: str = "get_global_news"
     description: str = (
         "Fetches broad market headlines from Yahoo Finance index ticker feeds. "
-        "The result explicitly notes this source limitation."
+        "Returns compact article summaries and links."
     )
     args_schema: Type[BaseModel] = GlobalNewsInput
 
@@ -64,20 +64,21 @@ def get_news_text(
     try:
         items = list(getattr(yf.Ticker(clean_query), "news", None) or [])
     except Exception as exc:
-        return f"No news data available for {clean_query}. Upstream error: {exc}"
+        return f"Error fetching news for {clean_query}: {exc}"
 
     start = _parse_date(start_date)
     end = _parse_date(end_date)
     records = _filter_records((_normalise_news_item(item) for item in items), start, end)
     records = records[: max(limit, 0)]
     if not records:
-        return f"No news data available for {clean_query} between {start_date} and {end_date}."
+        if start_date and end_date:
+            return f"No news found for {clean_query} between {start_date} and {end_date}"
+        return f"No news found for {clean_query}"
 
-    lines = [
-        f"News for {clean_query} between {start_date or 'unbounded'} and {end_date or 'unbounded'}."
-    ]
-    lines.extend(_format_record(index, record) for index, record in enumerate(records, start=1))
-    return "\n".join(lines)
+    return _format_news_block(
+        heading=f"## {clean_query} News, from {start_date or 'unbounded'} to {end_date or 'unbounded'}:",
+        records=records,
+    )
 
 
 def get_global_news_text(curr_date: str, look_back_days: int = 7, limit: int = 10) -> str:
@@ -94,29 +95,26 @@ def get_global_news_text(curr_date: str, look_back_days: int = 7, limit: int = 1
     records = _filter_records(collected, start, end)
     records = _dedupe_records(records)[: max(limit, 0)]
     if not records:
-        return (
-            "Source limitation: global news currently uses Yahoo Finance index ticker feeds "
-            f"(^GSPC, ^IXIC, ^DJI). No global news data available between "
-            f"{start.strftime('%Y-%m-%d')} and {end.strftime('%Y-%m-%d')}."
-        )
+        return f"No global news found for {curr_date}"
 
-    lines = [
-        "Source limitation: global news currently uses Yahoo Finance index ticker feeds "
-        "(^GSPC, ^IXIC, ^DJI).",
-        f"Global market news from {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}.",
-    ]
-    lines.extend(_format_record(index, record) for index, record in enumerate(records, start=1))
-    return "\n".join(lines)
+    return _format_news_block(
+        heading=(
+            "## Global Market News, from "
+            f"{start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}:"
+        ),
+        records=records,
+    )
 
 
 def _normalise_news_item(item: dict[str, Any], source_symbol: str | None = None) -> dict[str, Any]:
     content = item.get("content") if isinstance(item.get("content"), dict) else {}
+    provider = content.get("provider") if isinstance(content.get("provider"), dict) else {}
     canonical_url = content.get("canonicalUrl") if isinstance(content.get("canonicalUrl"), dict) else {}
     click_through = content.get("clickThroughUrl") if isinstance(content.get("clickThroughUrl"), dict) else {}
-    provider = content.get("provider") if isinstance(content.get("provider"), dict) else {}
     timestamp = content.get("pubDate") or item.get("providerPublishTime") or item.get("pubDate")
     return {
         "title": content.get("title") or item.get("title") or "No title",
+        "summary": content.get("summary") or item.get("summary") or "",
         "publisher": (
             provider.get("displayName")
             or item.get("publisher")
@@ -124,9 +122,8 @@ def _normalise_news_item(item: dict[str, Any], source_symbol: str | None = None)
             or source_symbol
             or "Unknown"
         ),
-        "pub_date": _parse_news_timestamp(timestamp),
-        "summary": content.get("summary") or item.get("summary") or "",
         "link": canonical_url.get("url") or click_through.get("url") or item.get("link") or "",
+        "pub_date": _parse_news_timestamp(timestamp),
     }
 
 
@@ -163,22 +160,18 @@ def _dedupe_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return deduped
 
 
-def _format_record(index: int, record: dict[str, Any]) -> str:
-    pub_date = record.get("pub_date")
-    date_text = pub_date.strftime("%Y-%m-%d %H:%M") if pub_date is not None else "unknown date"
-    title = record.get("title", "No title")
-    publisher = record.get("publisher", "Unknown")
-    lines = [
-        f"{index}. {title} (source: {publisher})",
-        f"Published: {date_text}",
-    ]
-    summary = record.get("summary")
-    if summary:
-        lines.append(str(summary))
-    link = record.get("link")
-    if link:
-        lines.append(f"Link: {link}")
-    return "\n".join(lines)
+def _format_news_block(heading: str, records: list[dict[str, Any]]) -> str:
+    articles = []
+    for record in records:
+        article_lines = [f"### {record.get('title', 'No title')} (source: {record.get('publisher', 'Unknown')})"]
+        summary = record.get("summary")
+        if summary:
+            article_lines.append(str(summary))
+        link = record.get("link")
+        if link:
+            article_lines.append(f"Link: {link}")
+        articles.append("\n".join(article_lines))
+    return heading + "\n\n" + "\n\n".join(articles) + "\n"
 
 
 def _parse_news_timestamp(value: Any) -> pd.Timestamp | None:

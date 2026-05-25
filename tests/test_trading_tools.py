@@ -169,16 +169,15 @@ def test_news_formats_and_filters(monkeypatch):
 
     result = get_news._run("AAPL", "2024-01-01", "2024-01-03", limit=5)
 
-    assert "News for AAPL between 2024-01-01 and 2024-01-03." in result
-    assert "Apple unveils new chip" in result
-    assert "Example News" in result
-    assert "Published: 2024-01-02 12:00" in result
-    assert "Apple unveiled a faster chip for upcoming devices." in result
-    assert "https://example.com/aapl-chip" in result
-    assert "Old headline" not in result
+    assert result == (
+        "## AAPL News, from 2024-01-01 to 2024-01-03:\n\n"
+        "### Apple unveils new chip (source: Example News)\n"
+        "Apple unveiled a faster chip for upcoming devices.\n"
+        "Link: https://example.com/aapl-chip\n"
+    )
 
 
-def test_global_news_limits_and_declares_yahoo_limitation(monkeypatch):
+def test_global_news_limits_and_matches_upstream_style(monkeypatch):
     published = int(pd.Timestamp("2024-01-02 15:00", tz="UTC").timestamp())
 
     class FakeTicker:
@@ -196,9 +195,11 @@ def test_global_news_limits_and_declares_yahoo_limitation(monkeypatch):
 
     result = get_global_news._run("2024-01-03", look_back_days=2, limit=1)
 
-    assert result.startswith("Source limitation: global news currently uses Yahoo Finance")
-    assert "Global market news from 2024-01-01 to 2024-01-03." in result
-    assert result.count("Index rally") == 1
+    assert result == (
+        "## Global Market News, from 2024-01-01 to 2024-01-03:\n\n"
+        "### Index rally from ^GSPC (source: Market Desk)\n"
+        "Link: https://example.com/^GSPC\n"
+    )
 
 
 def test_sentiment_helpers_degrade_when_fetch_fails(monkeypatch):
@@ -208,15 +209,15 @@ def test_sentiment_helpers_degrade_when_fetch_fails(monkeypatch):
     monkeypatch.setattr(sentiment, "_fetch_json", fake_fetch)
 
     assert fetch_stocktwits_messages("AAPL") == "No data available for StockTwits messages for AAPL."
-    reddit = fetch_reddit_posts("AAPL")
-    assert "No data available for Reddit posts for AAPL." in reddit
-    assert "r/wallstreetbets, r/stocks, r/investing" in reddit
+    assert fetch_reddit_posts("AAPL", inter_request_delay=0) == "No data available for Reddit posts for AAPL."
 
 
-def test_sentiment_helpers_format_fixture_payloads(monkeypatch):
+def test_sentiment_helpers_match_upstream_success_formats(monkeypatch):
     now = 1_700_000_000
+    trimmed_reddit_body = "Long analysis " + ("x" * 226) + "…"
+    trimmed_stocktwits_body = ("x" * 280) + "…"
 
-    def fake_fetch(url, headers=None):
+    def fake_fetch(url, headers=None, timeout=10.0):
         if "stocktwits" in url:
             return {
                 "messages": [
@@ -250,7 +251,6 @@ def test_sentiment_helpers_format_fixture_payloads(monkeypatch):
                             "num_comments": 5,
                             "created_utc": now - 60,
                             "selftext": "Long\nanalysis " + "x" * 300,
-                            "permalink": "/r/stocks/comments/abc/aapl/",
                         }
                     },
                     {
@@ -281,19 +281,21 @@ def test_sentiment_helpers_format_fixture_payloads(monkeypatch):
     monkeypatch.setattr(sentiment.time, "time", lambda: now)
 
     stocktwits = fetch_stocktwits_messages("aapl")
-    reddit = fetch_reddit_posts("AAPL", subreddits=("stocks",), limit_per_sub=5)
-
-    assert stocktwits.startswith(
-        "Bullish: 1 (33%) - Bearish: 1 (33%) - Unlabeled: 1 - Total: 3 most-recent messages"
+    reddit = fetch_reddit_posts(
+        "AAPL",
+        subreddits=("stocks",),
+        limit_per_sub=5,
+        inter_request_delay=0,
     )
-    assert "[2024-01-02T12:00:00Z - @market_user - Bullish] Bullish setup" in stocktwits
-    assert "[2024-01-02T12:05:00Z - @macro_user - Bearish] Risk is rising" in stocktwits
-    assert "@long_user - no-label" in stocktwits
-    assert "x" * 281 not in stocktwits
 
-    assert "r/stocks - 1 high-quality recent posts mentioning AAPL:" in reddit
-    assert "[2023-11-14 -    8 upvotes -   5 comments] AAPL earnings thread" in reddit
-    assert "body excerpt: Long analysis" in reddit
-    assert "x" * 241 not in reddit
-    assert "Low quality AAPL thread" not in reddit
-    assert "Old AAPL thread" not in reddit
+    assert stocktwits == (
+        "Bullish: 1 (33%) · Bearish: 1 (33%) · Unlabeled: 1 · Total: 3 most-recent messages\n\n"
+        "[2024-01-02T12:00:00Z · @market_user · Bullish] Bullish setup\n"
+        "[2024-01-02T12:05:00Z · @macro_user · Bearish] Risk is rising\n"
+        f"[2024-01-02T12:10:00Z · @long_user · no-label] {trimmed_stocktwits_body}"
+    )
+    assert reddit == (
+        "r/stocks — 1 recent posts mentioning AAPL:\n"
+        " [2023-11-14 ·    8↑ ·   5c] AAPL earnings thread\n"
+        f" body excerpt: {trimmed_reddit_body}"
+    )
