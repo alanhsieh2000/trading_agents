@@ -351,6 +351,32 @@ The output of the flow is:
 
 ## Running the Project
 
+Run the default analyst flow with the default ticker and the current UTC trade date:
+
+```bash
+uv run analyze
+```
+
+Run the analyst flow for a specific ticker and save the reports under `output/<TICKER>_<TRADE_DATE>/`:
+
+```bash
+uv run analyze --ticker AAPL --trade-date 2026-05-25
+```
+
+If you omit `--trade-date`, the flow uses the current UTC date:
+
+```bash
+uv run analyze --ticker AAPL
+```
+
+The generated markdown reports are saved in the matching output directory, for example `output/AAPL_2026-05-25/`.
+
+For compatibility, you can still pass a raw JSON trigger payload:
+
+```bash
+uv run run_with_trigger '{"ticker":"AAPL","trade_date":"2026-05-25"}'
+```
+
 # Acknowledgements and Citation
 
 The original TradingAgents project was developed by Tauric Research and is

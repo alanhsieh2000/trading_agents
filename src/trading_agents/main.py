@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 from __future__ import annotations
 
+import argparse
 from datetime import UTC, datetime
 import os
 from pathlib import Path
@@ -110,6 +111,32 @@ def run_with_trigger() -> Any:
         raise Exception(f"An error occurred while running the flow with trigger: {exc}") from exc
 
 
+
+def cli(argv: list[str] | None = None) -> Any:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run the TradingAgents analyst flow and save reports under output/<ticker>_<trade_date>."
+        )
+    )
+    parser.add_argument("--ticker", help="Ticker symbol to analyze, for example AAPL or NVDA.")
+    parser.add_argument(
+        "--trade-date",
+        help="Trade date in YYYY-MM-DD format. Defaults to the current UTC date.",
+    )
+    args = parser.parse_args(argv)
+
+    payload: dict[str, str] = {}
+    if args.ticker:
+        payload["ticker"] = args.ticker.strip().upper()
+    if args.trade_date:
+        payload["trade_date"] = args.trade_date.strip()
+
+    if not payload:
+        return kickoff()
+
+    flow = TradingAgentsFlow(tracing=True)
+    return flow.kickoff(inputs={"crewai_trigger_payload": payload})
+
 def save_analyst_outputs(state: TradingAgentsState) -> Path:
     output_dir = Path(state.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -142,4 +169,4 @@ def _validate_trade_date(trade_date: str) -> None:
 
 
 if __name__ == "__main__":
-    kickoff()
+    cli()

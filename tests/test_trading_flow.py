@@ -70,6 +70,47 @@ def test_kickoff_uses_default_trading_inputs(monkeypatch, tmp_path):
     assert result["output_dir"] == f"output/NVDA_{expected_trade_date}"
 
 
+
+
+def test_cli_uses_ticker_and_trade_date_payload(monkeypatch):
+    captured = {}
+
+    class FakeFlow:
+        def __init__(self, tracing):
+            captured["tracing"] = tracing
+
+        def kickoff(self, inputs=None):
+            captured["inputs"] = inputs
+            return {"ok": True}
+
+    monkeypatch.setattr(main_module, "TradingAgentsFlow", FakeFlow)
+
+    result = main_module.cli(["--ticker", "aapl", "--trade-date", "2026-05-25"])
+
+    assert result == {"ok": True}
+    assert captured["tracing"] is True
+    assert captured["inputs"] == {
+        "crewai_trigger_payload": {
+            "ticker": "AAPL",
+            "trade_date": "2026-05-25",
+        }
+    }
+
+
+def test_cli_without_arguments_uses_default_kickoff(monkeypatch):
+    calls = []
+
+    def fake_kickoff():
+        calls.append("kickoff")
+        return {"default": True}
+
+    monkeypatch.setattr(main_module, "kickoff", fake_kickoff)
+
+    result = main_module.cli([])
+
+    assert result == {"default": True}
+    assert calls == ["kickoff"]
+
 def test_invalid_trade_date_stops_before_analyst_stage(monkeypatch):
     called = False
 
