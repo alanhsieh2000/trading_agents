@@ -154,6 +154,7 @@ def test_news_formats_and_filters(monkeypatch):
                 "title": "Apple unveils new chip",
                 "publisher": "Example News",
                 "providerPublishTime": included_time,
+                "summary": "Apple unveiled a faster chip for upcoming devices.",
                 "link": "https://example.com/aapl-chip",
             },
             {
@@ -171,6 +172,8 @@ def test_news_formats_and_filters(monkeypatch):
     assert "News for AAPL between 2024-01-01 and 2024-01-03." in result
     assert "Apple unveils new chip" in result
     assert "Example News" in result
+    assert "Published: 2024-01-02 12:00" in result
+    assert "Apple unveiled a faster chip for upcoming devices." in result
     assert "https://example.com/aapl-chip" in result
     assert "Old headline" not in result
 
@@ -205,10 +208,14 @@ def test_sentiment_helpers_degrade_when_fetch_fails(monkeypatch):
     monkeypatch.setattr(sentiment, "_fetch_json", fake_fetch)
 
     assert fetch_stocktwits_messages("AAPL") == "No data available for StockTwits messages for AAPL."
-    assert fetch_reddit_posts("AAPL") == "No data available for Reddit posts for AAPL."
+    reddit = fetch_reddit_posts("AAPL")
+    assert "No data available for Reddit posts for AAPL." in reddit
+    assert "r/wallstreetbets, r/stocks, r/investing" in reddit
 
 
 def test_sentiment_helpers_format_fixture_payloads(monkeypatch):
+    now = 1_700_000_000
+
     def fake_fetch(url, headers=None):
         if "stocktwits" in url:
             return {
@@ -217,7 +224,19 @@ def test_sentiment_helpers_format_fixture_payloads(monkeypatch):
                         "created_at": "2024-01-02T12:00:00Z",
                         "body": "Bullish\nsetup",
                         "user": {"username": "market_user"},
-                    }
+                        "entities": {"sentiment": {"basic": "Bullish"}},
+                    },
+                    {
+                        "created_at": "2024-01-02T12:05:00Z",
+                        "body": "Risk is rising",
+                        "user": {"username": "macro_user"},
+                        "entities": {"sentiment": {"basic": "Bearish"}},
+                    },
+                    {
+                        "created_at": "2024-01-02T12:10:00Z",
+                        "body": "x" * 400,
+                        "user": {"username": "long_user"},
+                    },
                 ]
             }
         return {
@@ -227,20 +246,54 @@ def test_sentiment_helpers_format_fixture_payloads(monkeypatch):
                         "data": {
                             "subreddit_name_prefixed": "r/stocks",
                             "title": "AAPL earnings thread",
+                            "score": 8,
+                            "num_comments": 5,
+                            "created_utc": now - 60,
+                            "selftext": "Long\nanalysis " + "x" * 300,
                             "permalink": "/r/stocks/comments/abc/aapl/",
                         }
-                    }
+                    },
+                    {
+                        "data": {
+                            "subreddit_name_prefixed": "r/stocks",
+                            "title": "Low quality AAPL thread",
+                            "score": 4,
+                            "num_comments": 5,
+                            "created_utc": now - 60,
+                            "selftext": "Should be filtered out",
+                        }
+                    },
+                    {
+                        "data": {
+                            "subreddit_name_prefixed": "r/stocks",
+                            "title": "Old AAPL thread",
+                            "score": 20,
+                            "num_comments": 15,
+                            "created_utc": now - sentiment.SECONDS_PER_WEEK - 1,
+                            "selftext": "Should also be filtered out",
+                        }
+                    },
                 ]
             }
         }
 
     monkeypatch.setattr(sentiment, "_fetch_json", fake_fetch)
+    monkeypatch.setattr(sentiment.time, "time", lambda: now)
 
     stocktwits = fetch_stocktwits_messages("aapl")
-    reddit = fetch_reddit_posts("AAPL")
+    reddit = fetch_reddit_posts("AAPL", subreddits=("stocks",), limit_per_sub=5)
 
-    assert "StockTwits messages for AAPL:" in stocktwits
-    assert "market_user: Bullish setup" in stocktwits
-    assert "Reddit posts for AAPL:" in reddit
-    assert "r/stocks: AAPL earnings thread" in reddit
-    assert "https://www.reddit.com/r/stocks/comments/abc/aapl/" in reddit
+    assert stocktwits.startswith(
+        "Bullish: 1 (33%) - Bearish: 1 (33%) - Unlabeled: 1 - Total: 3 most-recent messages"
+    )
+    assert "[2024-01-02T12:00:00Z - @market_user - Bullish] Bullish setup" in stocktwits
+    assert "[2024-01-02T12:05:00Z - @macro_user - Bearish] Risk is rising" in stocktwits
+    assert "@long_user - no-label" in stocktwits
+    assert "x" * 281 not in stocktwits
+
+    assert "r/stocks - 1 high-quality recent posts mentioning AAPL:" in reddit
+    assert "[2023-11-14 -    8 upvotes -   5 comments] AAPL earnings thread" in reddit
+    assert "body excerpt: Long analysis" in reddit
+    assert "x" * 241 not in reddit
+    assert "Low quality AAPL thread" not in reddit
+    assert "Old AAPL thread" not in reddit

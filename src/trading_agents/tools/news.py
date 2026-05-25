@@ -27,8 +27,8 @@ class GlobalNewsInput(BaseModel):
 class GetNewsTool(BaseTool):
     name: str = "get_news"
     description: str = (
-        "Fetches company-specific or query-specific Yahoo Finance headlines with timestamps, "
-        "publisher/source, and URLs when available."
+        "Fetches company-specific or query-specific Yahoo Finance headlines with title, "
+        "publisher, publish date, summary, and link when available."
     )
     args_schema: Type[BaseModel] = NewsInput
 
@@ -112,25 +112,21 @@ def get_global_news_text(curr_date: str, look_back_days: int = 7, limit: int = 1
 def _normalise_news_item(item: dict[str, Any], source_symbol: str | None = None) -> dict[str, Any]:
     content = item.get("content") if isinstance(item.get("content"), dict) else {}
     canonical_url = content.get("canonicalUrl") if isinstance(content.get("canonicalUrl"), dict) else {}
-    provider = content.get("provider") if isinstance(content.get("provider"), dict) else {}
     click_through = content.get("clickThroughUrl") if isinstance(content.get("clickThroughUrl"), dict) else {}
-    timestamp = (
-        item.get("providerPublishTime")
-        or content.get("pubDate")
-        or content.get("displayTime")
-        or item.get("pubDate")
-    )
+    provider = content.get("provider") if isinstance(content.get("provider"), dict) else {}
+    timestamp = content.get("pubDate") or item.get("providerPublishTime") or item.get("pubDate")
     return {
-        "title": item.get("title") or content.get("title") or "Untitled headline",
+        "title": content.get("title") or item.get("title") or "No title",
         "publisher": (
-            item.get("publisher")
-            or provider.get("displayName")
+            provider.get("displayName")
+            or item.get("publisher")
             or item.get("source")
             or source_symbol
-            or "Unknown source"
+            or "Unknown"
         ),
-        "published_at": _parse_news_timestamp(timestamp),
-        "url": item.get("link") or canonical_url.get("url") or click_through.get("url"),
+        "pub_date": _parse_news_timestamp(timestamp),
+        "summary": content.get("summary") or item.get("summary") or "",
+        "link": canonical_url.get("url") or click_through.get("url") or item.get("link") or "",
     }
 
 
@@ -141,25 +137,25 @@ def _filter_records(
 ) -> list[dict[str, Any]]:
     filtered = []
     for record in records:
-        published_at = record.get("published_at")
-        if published_at is not None:
-            if start is not None and published_at < start:
+        pub_date = record.get("pub_date")
+        if pub_date is not None:
+            if start is not None and pub_date < start:
                 continue
-            if end is not None and published_at > end + timedelta(days=1):
+            if end is not None and pub_date > end + timedelta(days=1):
                 continue
         filtered.append(record)
     return sorted(
         filtered,
-        key=lambda record: record.get("published_at") or pd.Timestamp.min,
+        key=lambda record: record.get("pub_date") or pd.Timestamp.min,
         reverse=True,
     )
 
 
 def _dedupe_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: set[tuple[str, str | None]] = set()
+    seen: set[tuple[str, str]] = set()
     deduped = []
     for record in records:
-        key = (record.get("title", ""), record.get("url"))
+        key = (record.get("title", ""), record.get("link", ""))
         if key in seen:
             continue
         seen.add(key)
@@ -168,16 +164,21 @@ def _dedupe_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _format_record(index: int, record: dict[str, Any]) -> str:
-    timestamp = record.get("published_at")
-    if timestamp is None:
-        date_text = "unknown date"
-    else:
-        date_text = timestamp.strftime("%Y-%m-%d %H:%M")
-    url = record.get("url") or "No URL available"
-    return (
-        f"{index}. {date_text} - {record.get('publisher', 'Unknown source')} - "
-        f"{record.get('title', 'Untitled headline')} - {url}"
-    )
+    pub_date = record.get("pub_date")
+    date_text = pub_date.strftime("%Y-%m-%d %H:%M") if pub_date is not None else "unknown date"
+    title = record.get("title", "No title")
+    publisher = record.get("publisher", "Unknown")
+    lines = [
+        f"{index}. {title} (source: {publisher})",
+        f"Published: {date_text}",
+    ]
+    summary = record.get("summary")
+    if summary:
+        lines.append(str(summary))
+    link = record.get("link")
+    if link:
+        lines.append(f"Link: {link}")
+    return "\n".join(lines)
 
 
 def _parse_news_timestamp(value: Any) -> pd.Timestamp | None:
