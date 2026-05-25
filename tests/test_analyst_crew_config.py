@@ -181,7 +181,7 @@ def test_prepare_analyst_inputs_prefetches_with_current_date_window(monkeypatch)
     )
 
     assert captured_news_args["args"] == ("MSFT", "2024-06-03", "2024-06-10")
-    assert captured_news_args["kwargs"] == {"limit": 10}
+    assert captured_news_args["kwargs"] == {"limit": 20}
     assert prepared["trade_date"] == "2024-06-10"
     assert prepared["current_date"] == "2024-06-10"
     assert prepared["start_date"] == "2024-06-03"

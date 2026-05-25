@@ -126,7 +126,7 @@ def prepare_analyst_inputs(inputs: Mapping[str, Any]) -> dict[str, Any]:
         prepared["news_sentiment_block"] = prepared["news_block"]
     if "news_sentiment_block" not in prepared:
         prepared["news_sentiment_block"] = get_news._run(
-            ticker, start_date, current_date, limit=10
+            ticker, start_date, current_date, limit=20
         )
     if "news_block" not in prepared:
         prepared["news_block"] = prepared["news_sentiment_block"]

@@ -13,7 +13,7 @@ class NewsInput(BaseModel):
     query: str = Field(..., description="Ticker symbol or company/news query.")
     start_date: str | None = Field(None, description="Inclusive start date in YYYY-MM-DD format.")
     end_date: str | None = Field(None, description="Inclusive end date in YYYY-MM-DD format.")
-    limit: int = Field(10, description="Maximum number of headlines to return.")
+    limit: int = Field(20, description="Maximum number of headlines to return.")
 
 
 class GlobalNewsInput(BaseModel):
@@ -37,7 +37,7 @@ class GetNewsTool(BaseTool):
         query: str,
         start_date: str | None = None,
         end_date: str | None = None,
-        limit: int = 10,
+        limit: int = 20,
     ) -> str:
         return get_news_text(query, start_date, end_date, limit)
 
@@ -58,7 +58,7 @@ def get_news_text(
     query: str,
     start_date: str | None = None,
     end_date: str | None = None,
-    limit: int = 10,
+    limit: int = 20,
 ) -> str:
     clean_query = query.strip()
     try:

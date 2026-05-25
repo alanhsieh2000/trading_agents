@@ -213,6 +213,29 @@ def test_financial_statement_outputs(monkeypatch):
     )
 
 
+
+
+def test_get_news_uses_upstream_default_limit(monkeypatch):
+    class FakeTicker:
+        news = [
+            {
+                "title": f"Headline {index}",
+                "publisher": "Example News",
+                "providerPublishTime": int(pd.Timestamp(f"2024-01-{index:02d} 12:00", tz="UTC").timestamp()),
+                "link": f"https://example.com/{index}",
+            }
+            for index in range(1, 26)
+        ]
+
+    monkeypatch.setattr(news.yf, "Ticker", lambda query: FakeTicker())
+
+    result = get_news._run("AAPL")
+
+    assert result.count("### ") == 20
+    assert "### Headline 25" in result
+    assert "### Headline 6" in result
+    assert "### Headline 5" not in result
+
 def test_news_formats_and_filters(monkeypatch):
     included_time = int(pd.Timestamp("2024-01-02 12:00", tz="UTC").timestamp())
     excluded_time = int(pd.Timestamp("2023-12-15 12:00", tz="UTC").timestamp())
