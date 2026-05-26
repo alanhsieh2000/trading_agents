@@ -7,6 +7,7 @@ from trading_agents.crews.analyst_crew import analyst_crew as analyst_module
 from trading_agents.crews.analyst_crew.analyst_crew import (
     AnalystCrew,
     extract_analyst_reports,
+    resolve_analyst_runtime_config,
     run_analyst_stage,
 )
 
@@ -169,9 +170,13 @@ def test_prepare_analyst_inputs_prefetches_with_current_date_window(monkeypatch)
     monkeypatch.setattr(
         analyst_module,
         "fetch_stocktwits_messages",
-        lambda ticker, limit=30: "stocktwits",
+        lambda ticker, limit=30, timeout=10.0: "stocktwits",
     )
-    monkeypatch.setattr(analyst_module, "fetch_reddit_posts", lambda ticker: "reddit")
+    monkeypatch.setattr(
+        analyst_module,
+        "fetch_reddit_posts",
+        lambda ticker, limit=None, subreddits=None, limit_per_sub=5, timeout=10.0, inter_request_delay=0.4: "reddit",
+    )
 
     prepared = analyst_module.prepare_analyst_inputs(
         {
@@ -190,6 +195,76 @@ def test_prepare_analyst_inputs_prefetches_with_current_date_window(monkeypatch)
     assert prepared["news_block"] == "prefetched news"
     assert prepared["stocktwits_block"] == "stocktwits"
     assert prepared["reddit_block"] == "reddit"
+
+
+def test_prepare_analyst_inputs_uses_runtime_overrides(monkeypatch):
+    captured_news_args = {}
+    captured_stocktwits = {}
+    captured_reddit = {}
+
+    class CapturingNewsTool:
+        def _run(self, *args, **kwargs):
+            captured_news_args["args"] = args
+            captured_news_args["kwargs"] = kwargs
+            return "prefetched news"
+
+    def capture_stocktwits(ticker, limit=30, timeout=10.0):
+        captured_stocktwits.update(ticker=ticker, limit=limit, timeout=timeout)
+        return "stocktwits"
+
+    def capture_reddit(
+        ticker,
+        limit=None,
+        subreddits=None,
+        limit_per_sub=5,
+        timeout=10.0,
+        inter_request_delay=0.4,
+    ):
+        captured_reddit.update(
+            ticker=ticker,
+            limit=limit,
+            subreddits=subreddits,
+            limit_per_sub=limit_per_sub,
+            timeout=timeout,
+            inter_request_delay=inter_request_delay,
+        )
+        return "reddit"
+
+    monkeypatch.setattr(analyst_module, "get_news", CapturingNewsTool())
+    monkeypatch.setattr(analyst_module, "fetch_stocktwits_messages", capture_stocktwits)
+    monkeypatch.setattr(analyst_module, "fetch_reddit_posts", capture_reddit)
+
+    prepared = analyst_module.prepare_analyst_inputs(
+        {
+            "ticker": "msft",
+            "current_date": "2024-06-10",
+            "lookback_days": 2,
+            "news_limit": 4,
+            "stocktwits_limit": 7,
+            "reddit_limit_per_sub": 3,
+            "reddit_timeout": 1.25,
+        }
+    )
+
+    assert captured_news_args["args"] == ("MSFT", "2024-06-08", "2024-06-10")
+    assert captured_news_args["kwargs"] == {"limit": 4}
+    assert captured_stocktwits == {"ticker": "MSFT", "limit": 7, "timeout": 10.0}
+    assert captured_reddit == {
+        "ticker": "MSFT",
+        "limit": None,
+        "subreddits": None,
+        "limit_per_sub": 3,
+        "timeout": 1.25,
+        "inter_request_delay": 0.4,
+    }
+    assert prepared["start_date"] == "2024-06-08"
+    assert prepared["sentiment_start_date"] == "2024-06-08"
+
+
+def test_resolve_analyst_runtime_config_is_reexported_from_analyst_module():
+    runtime = resolve_analyst_runtime_config({})
+
+    assert runtime.lookback_days == 7
 
 
 def test_run_analyst_stage_uses_mocked_sequential_crew(monkeypatch):

@@ -6,8 +6,9 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+from trading_agents.config import get_settings
 
-DEFAULT_SUBREDDITS = ("wallstreetbets", "stocks", "investing")
+
 REDDIT_HEADERS = {
     "User-Agent": "tradingagents/0.2 (+https://github.com/TauricResearch/TradingAgents)",
     "Accept": "application/json",
@@ -16,20 +17,21 @@ STOCKTWITS_HEADERS = {
     "User-Agent": "tradingagents/0.2 (+https://github.com/TauricResearch/TradingAgents)",
     "Accept": "application/json",
 }
-MIN_REDDIT_SCORE = 4
-MIN_REDDIT_COMMENTS = 3
 SECONDS_PER_WEEK = 7 * 24 * 60 * 60
 
 
 def fetch_stocktwits_messages(
     ticker: str,
-    limit: int = 30,
-    timeout: float = 10.0,
+    limit: int | None = None,
+    timeout: float | None = None,
 ) -> str:
+    settings = get_settings().sentiment
+    effective_limit = settings.stocktwits_limit if limit is None else limit
+    effective_timeout = settings.stocktwits_timeout if timeout is None else timeout
     symbol = ticker.upper().strip()
-    url = f"https://api.stocktwits.com/api/2/streams/symbol/{quote(symbol)}.json?limit={limit}"
+    url = f"https://api.stocktwits.com/api/2/streams/symbol/{quote(symbol)}.json?limit={effective_limit}"
     try:
-        payload = _fetch_json(url, headers=STOCKTWITS_HEADERS, timeout=timeout)
+        payload = _fetch_json(url, headers=STOCKTWITS_HEADERS, timeout=effective_timeout)
     except Exception:
         return f"No data available for StockTwits messages for {symbol}."
 
@@ -39,7 +41,7 @@ def fetch_stocktwits_messages(
 
     lines = []
     bullish = bearish = unlabeled = 0
-    for message in messages[: max(limit, 0)]:
+    for message in messages[: max(effective_limit, 0)]:
         sentiment_obj = ((message.get("entities") or {}).get("sentiment") or {})
         sentiment = sentiment_obj.get("basic") if isinstance(sentiment_obj, dict) else None
         if sentiment == "Bullish":
@@ -72,29 +74,45 @@ def fetch_stocktwits_messages(
 def fetch_reddit_posts(
     query: str,
     limit: int | None = None,
-    subreddits: Iterable[str] = DEFAULT_SUBREDDITS,
-    limit_per_sub: int = 5,
-    timeout: float = 10.0,
-    inter_request_delay: float = 0.4,
+    subreddits: Iterable[str] | None = None,
+    limit_per_sub: int | None = None,
+    timeout: float | None = None,
+    inter_request_delay: float | None = None,
 ) -> str:
+    settings = get_settings().sentiment
+    effective_subreddits = tuple(settings.reddit_subreddits if subreddits is None else subreddits)
+    effective_limit_per_sub = settings.reddit_limit_per_sub if limit_per_sub is None else limit_per_sub
+    effective_timeout = settings.reddit_timeout if timeout is None else timeout
+    effective_delay = (
+        settings.reddit_inter_request_delay
+        if inter_request_delay is None
+        else inter_request_delay
+    )
+    effective_limit = max(effective_limit_per_sub if limit is None else limit, 0)
     clean_query = query.strip()
-    effective_limit = min(max(limit_per_sub if limit is None else limit, 0), 5)
     blocks = []
     total_posts = 0
+    now = time.time()
 
-    for index, subreddit in enumerate(tuple(subreddits)):
-        if index > 0 and inter_request_delay > 0:
-            time.sleep(inter_request_delay)
+    for index, subreddit in enumerate(effective_subreddits):
+        if index > 0 and effective_delay > 0:
+            time.sleep(effective_delay)
 
         try:
-            posts = _fetch_subreddit_posts(clean_query, subreddit, effective_limit, timeout)
+            posts = _fetch_subreddit_posts(clean_query, subreddit, effective_limit, effective_timeout)
         except Exception:
             posts = []
 
         posts = [
             post
             for post in posts
-            if _is_quality_recent_reddit_post(post, now=time.time())
+            if _is_quality_recent_reddit_post(
+                post,
+                now=now,
+                min_score=settings.reddit_min_score,
+                min_comments=settings.reddit_min_comments,
+                recency_window_seconds=settings.reddit_recency_window_seconds,
+            )
         ][:effective_limit]
         total_posts += len(posts)
 
@@ -143,16 +161,22 @@ def _fetch_subreddit_posts(
     return [child.get("data") or {} for child in children if isinstance(child, dict)]
 
 
-def _is_quality_recent_reddit_post(post: dict[str, Any], now: float) -> bool:
+def _is_quality_recent_reddit_post(
+    post: dict[str, Any],
+    now: float,
+    min_score: int,
+    min_comments: int,
+    recency_window_seconds: int,
+) -> bool:
     created = post.get("created_utc")
     try:
         created_timestamp = float(created)
     except (TypeError, ValueError):
         return False
     return (
-        now - SECONDS_PER_WEEK <= created_timestamp <= now
-        and _as_int(post.get("score")) > MIN_REDDIT_SCORE
-        and _as_int(post.get("num_comments")) > MIN_REDDIT_COMMENTS
+        now - recency_window_seconds <= created_timestamp <= now
+        and _as_int(post.get("score")) > min_score
+        and _as_int(post.get("num_comments")) > min_comments
     )
 
 

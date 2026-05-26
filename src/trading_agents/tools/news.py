@@ -6,6 +6,8 @@ import yfinance as yf
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from trading_agents.config import get_settings
+
 
 class NewsInput(BaseModel):
     """Input schema for ticker or query news."""
@@ -13,15 +15,15 @@ class NewsInput(BaseModel):
     query: str = Field(..., description="Ticker symbol or company/news query.")
     start_date: str | None = Field(None, description="Inclusive start date in YYYY-MM-DD format.")
     end_date: str | None = Field(None, description="Inclusive end date in YYYY-MM-DD format.")
-    limit: int = Field(20, description="Maximum number of headlines to return.")
+    limit: int | None = Field(None, description="Maximum number of headlines to return.")
 
 
 class GlobalNewsInput(BaseModel):
     """Input schema for broad market news."""
 
     curr_date: str = Field(..., description="Current date in YYYY-MM-DD format.")
-    look_back_days: int = Field(7, description="Number of calendar days to look back.")
-    limit: int = Field(10, description="Maximum number of headlines to return.")
+    look_back_days: int | None = Field(None, description="Number of calendar days to look back.")
+    limit: int | None = Field(None, description="Maximum number of headlines to return.")
 
 
 class GetNewsTool(BaseTool):
@@ -37,7 +39,7 @@ class GetNewsTool(BaseTool):
         query: str,
         start_date: str | None = None,
         end_date: str | None = None,
-        limit: int = 20,
+        limit: int | None = None,
     ) -> str:
         return get_news_text(query, start_date, end_date, limit)
 
@@ -50,7 +52,12 @@ class GetGlobalNewsTool(BaseTool):
     )
     args_schema: Type[BaseModel] = GlobalNewsInput
 
-    def _run(self, curr_date: str, look_back_days: int = 7, limit: int = 10) -> str:
+    def _run(
+        self,
+        curr_date: str,
+        look_back_days: int | None = None,
+        limit: int | None = None,
+    ) -> str:
         return get_global_news_text(curr_date, look_back_days, limit)
 
 
@@ -58,9 +65,10 @@ def get_news_text(
     query: str,
     start_date: str | None = None,
     end_date: str | None = None,
-    limit: int = 20,
+    limit: int | None = None,
 ) -> str:
     clean_query = query.strip()
+    effective_limit = get_settings().news.ticker_limit if limit is None else limit
     try:
         items = list(getattr(yf.Ticker(clean_query), "news", None) or [])
     except Exception as exc:
@@ -69,7 +77,7 @@ def get_news_text(
     start = _parse_date(start_date)
     end = _parse_date(end_date)
     records = _filter_records((_normalise_news_item(item) for item in items), start, end)
-    records = records[: max(limit, 0)]
+    records = records[: max(effective_limit, 0)]
     if not records:
         if start_date and end_date:
             return f"No news found for {clean_query} between {start_date} and {end_date}"
@@ -81,11 +89,18 @@ def get_news_text(
     )
 
 
-def get_global_news_text(curr_date: str, look_back_days: int = 7, limit: int = 10) -> str:
+def get_global_news_text(
+    curr_date: str,
+    look_back_days: int | None = None,
+    limit: int | None = None,
+) -> str:
+    settings = get_settings().news
+    effective_lookback = settings.global_lookback_days if look_back_days is None else look_back_days
+    effective_limit = settings.global_limit if limit is None else limit
     end = _parse_date(curr_date) or pd.Timestamp.utcnow().normalize().tz_localize(None)
-    start = end - timedelta(days=max(look_back_days, 0))
+    start = end - timedelta(days=max(effective_lookback, 0))
     collected: list[dict[str, Any]] = []
-    for symbol in ["^GSPC", "^IXIC", "^DJI"]:
+    for symbol in settings.global_index_symbols:
         try:
             items = getattr(yf.Ticker(symbol), "news", None) or []
         except Exception:
@@ -93,7 +108,7 @@ def get_global_news_text(curr_date: str, look_back_days: int = 7, limit: int = 1
         collected.extend(_normalise_news_item(item, source_symbol=symbol) for item in items)
 
     records = _filter_records(collected, start, end)
-    records = _dedupe_records(records)[: max(limit, 0)]
+    records = _dedupe_records(records)[: max(effective_limit, 0)]
     if not records:
         return f"No global news found for {curr_date}"
 

@@ -10,6 +10,7 @@ from crewai.crews.crew_output import CrewOutput
 from crewai.project import CrewBase, agent, crew, task
 from dotenv import load_dotenv
 
+from trading_agents.config import get_settings, resolve_analyst_runtime_config
 from trading_agents.tools import (
     fetch_reddit_posts,
     fetch_stocktwits_messages,
@@ -111,7 +112,9 @@ def prepare_analyst_inputs(inputs: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize analyst-stage inputs and prefetch prompt-only evidence blocks."""
     ticker = _required_string(inputs, "ticker").upper()
     current_date = _current_date(inputs)
-    start_date = _days_back(current_date, days=7)
+    runtime = resolve_analyst_runtime_config(inputs)
+    settings = get_settings()
+    start_date = _days_back(current_date, days=runtime.lookback_days)
 
     prepared = dict(inputs)
     prepared["ticker"] = ticker
@@ -126,15 +129,26 @@ def prepare_analyst_inputs(inputs: Mapping[str, Any]) -> dict[str, Any]:
         prepared["news_sentiment_block"] = prepared["news_block"]
     if "news_sentiment_block" not in prepared:
         prepared["news_sentiment_block"] = get_news._run(
-            ticker, start_date, current_date, limit=20
+            ticker,
+            start_date,
+            current_date,
+            limit=runtime.news_limit,
         )
     if "news_block" not in prepared:
         prepared["news_block"] = prepared["news_sentiment_block"]
 
     if "stocktwits_block" not in prepared:
-        prepared["stocktwits_block"] = fetch_stocktwits_messages(ticker, limit=30)
+        prepared["stocktwits_block"] = fetch_stocktwits_messages(
+            ticker,
+            limit=runtime.stocktwits_limit,
+            timeout=settings.sentiment.stocktwits_timeout,
+        )
     if "reddit_block" not in prepared:
-        prepared["reddit_block"] = fetch_reddit_posts(ticker)
+        prepared["reddit_block"] = fetch_reddit_posts(
+            ticker,
+            limit_per_sub=runtime.reddit_limit_per_sub,
+            timeout=runtime.reddit_timeout,
+        )
     return prepared
 
 

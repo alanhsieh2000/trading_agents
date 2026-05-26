@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from functools import lru_cache
+from typing import Any
+
+from pydantic import BaseModel, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class NewsSettings(BaseModel):
+    ticker_limit: int = Field(default=20, ge=0)
+    global_limit: int = Field(default=10, ge=0)
+    global_lookback_days: int = Field(default=7, ge=0)
+    global_index_symbols: tuple[str, ...] = ("^GSPC", "^IXIC", "^DJI")
+
+
+class SentimentSettings(BaseModel):
+    stocktwits_limit: int = Field(default=30, ge=0)
+    stocktwits_timeout: float = Field(default=10.0, gt=0)
+    reddit_subreddits: tuple[str, ...] = ("wallstreetbets", "stocks", "investing")
+    reddit_limit_per_sub: int = Field(default=5, ge=0)
+    reddit_timeout: float = Field(default=10.0, gt=0)
+    reddit_inter_request_delay: float = Field(default=0.4, ge=0)
+    reddit_min_score: int = Field(default=4)
+    reddit_min_comments: int = Field(default=3)
+    reddit_recency_window_seconds: int = Field(default=7 * 24 * 60 * 60, ge=0)
+
+
+class AnalystStageSettings(BaseModel):
+    lookback_days: int = Field(default=7, ge=0)
+
+
+class AppSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="TRADING_AGENTS_",
+        env_nested_delimiter="__",
+        extra="ignore",
+    )
+
+    news: NewsSettings = NewsSettings()
+    sentiment: SentimentSettings = SentimentSettings()
+    analyst_stage: AnalystStageSettings = AnalystStageSettings()
+
+
+ANALYST_INPUT_OVERRIDE_KEYS = (
+    "lookback_days",
+    "news_limit",
+    "global_news_limit",
+    "stocktwits_limit",
+    "reddit_limit_per_sub",
+    "reddit_timeout",
+)
+
+
+class AnalystRuntimeConfig(BaseModel):
+    lookback_days: int = Field(ge=0)
+    news_limit: int = Field(ge=0)
+    global_news_limit: int = Field(ge=0)
+    stocktwits_limit: int = Field(ge=0)
+    reddit_limit_per_sub: int = Field(ge=0)
+    reddit_timeout: float = Field(gt=0)
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> AppSettings:
+    return AppSettings()
+
+
+def resolve_analyst_runtime_config(inputs: Mapping[str, Any]) -> AnalystRuntimeConfig:
+    settings = get_settings()
+    payload = {
+        "lookback_days": settings.analyst_stage.lookback_days,
+        "news_limit": settings.news.ticker_limit,
+        "global_news_limit": settings.news.global_limit,
+        "stocktwits_limit": settings.sentiment.stocktwits_limit,
+        "reddit_limit_per_sub": settings.sentiment.reddit_limit_per_sub,
+        "reddit_timeout": settings.sentiment.reddit_timeout,
+    }
+    for key in ANALYST_INPUT_OVERRIDE_KEYS:
+        value = inputs.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and value.strip() == "":
+            continue
+        payload[key] = value
+    return AnalystRuntimeConfig.model_validate(payload)

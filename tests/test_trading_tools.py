@@ -1,5 +1,10 @@
 import pandas as pd
 
+from trading_agents.config.settings import (
+    AppSettings,
+    NewsSettings,
+    SentimentSettings,
+)
 from trading_agents.tools import (
     fetch_reddit_posts,
     fetch_stocktwits_messages,
@@ -294,6 +299,36 @@ def test_global_news_limits_and_matches_upstream_style(monkeypatch):
     )
 
 
+def test_global_news_uses_configured_symbols(monkeypatch):
+    published = int(pd.Timestamp("2024-01-02 15:00", tz="UTC").timestamp())
+    seen_symbols = []
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            seen_symbols.append(symbol)
+            self.news = [
+                {
+                    "title": f"Index rally from {symbol}",
+                    "publisher": "Market Desk",
+                    "providerPublishTime": published,
+                    "link": f"https://example.com/{symbol}",
+                }
+            ]
+
+    monkeypatch.setattr(
+        news,
+        "get_settings",
+        lambda: AppSettings(news=NewsSettings(global_index_symbols=("SPY", "QQQ"))),
+    )
+    monkeypatch.setattr(news.yf, "Ticker", FakeTicker)
+
+    result = news.get_global_news_text("2024-01-03")
+
+    assert seen_symbols == ["SPY", "QQQ"]
+    assert "### Index rally from SPY" in result
+    assert "### Index rally from QQQ" in result
+
+
 def test_sentiment_helpers_degrade_when_fetch_fails(monkeypatch):
     def fake_fetch(*args, **kwargs):
         raise RuntimeError("network unavailable")
@@ -391,3 +426,76 @@ def test_sentiment_helpers_match_upstream_success_formats(monkeypatch):
         " [2023-11-14 ·    8↑ ·   5c] AAPL earnings thread\n"
         f" body excerpt: {trimmed_reddit_body}"
     )
+
+
+def test_stocktwits_uses_settings_defaults_when_args_omitted(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(
+        sentiment,
+        "get_settings",
+        lambda: AppSettings(
+            sentiment=SentimentSettings(stocktwits_limit=12, stocktwits_timeout=1.5)
+        ),
+    )
+
+    def fake_fetch(url, headers=None, timeout=10.0):
+        captured.update(url=url, headers=headers, timeout=timeout)
+        return {"messages": []}
+
+    monkeypatch.setattr(sentiment, "_fetch_json", fake_fetch)
+
+    fetch_stocktwits_messages("AAPL")
+
+    assert captured["url"].endswith("/AAPL.json?limit=12")
+    assert captured["timeout"] == 1.5
+
+
+def test_reddit_uses_settings_defaults_for_fetch_and_filtering(monkeypatch):
+    now = 1_700_000_000
+    calls = []
+
+    monkeypatch.setattr(
+        sentiment,
+        "get_settings",
+        lambda: AppSettings(
+            sentiment=SentimentSettings(
+                reddit_subreddits=("alpha", "beta"),
+                reddit_limit_per_sub=2,
+                reddit_timeout=1.25,
+                reddit_inter_request_delay=0.0,
+                reddit_min_score=10,
+                reddit_min_comments=6,
+                reddit_recency_window_seconds=600,
+            )
+        ),
+    )
+
+    def fake_fetch_posts(query, subreddit, limit, timeout):
+        calls.append((query, subreddit, limit, timeout))
+        return [
+            {
+                "title": f"{subreddit} keep",
+                "score": 11,
+                "num_comments": 7,
+                "created_utc": now - 60,
+                "selftext": "kept",
+            },
+            {
+                "title": f"{subreddit} filtered",
+                "score": 9,
+                "num_comments": 7,
+                "created_utc": now - 60,
+                "selftext": "filtered",
+            },
+        ]
+
+    monkeypatch.setattr(sentiment, "_fetch_subreddit_posts", fake_fetch_posts)
+    monkeypatch.setattr(sentiment.time, "time", lambda: now)
+
+    result = fetch_reddit_posts("AAPL")
+
+    assert calls == [("AAPL", "alpha", 2, 1.25), ("AAPL", "beta", 2, 1.25)]
+    assert "r/alpha — 1 recent posts mentioning AAPL:" in result
+    assert "alpha filtered" not in result
+    assert "r/beta — 1 recent posts mentioning AAPL:" in result
