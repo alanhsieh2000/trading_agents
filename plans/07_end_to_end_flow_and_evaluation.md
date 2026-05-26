@@ -14,15 +14,16 @@ A user should be able to run the project with a trigger payload such as `{"ticke
 
 - [x] (2026-05-23 14:20Z) Read `README.md`, including the required five-stage flow and final output contract.
 - [x] (2026-05-23 14:20Z) Read the current `src/trading_agents/main.py`, which still defines a placeholder content-writing flow.
-- [x] (2026-05-24 08:12Z) Removed the generated `src/trading_agents/crews/content_crew` reference and replaced `main.py` with a traced analyst-stage `TradingAgentsFlow` so live runs now create CrewAI traces before the full plan 04 implementation.
+- [x] (2026-05-24 08:12Z) Removed the generated `src/trading_agents/crews/content_crew` reference and replaced `main.py` with a traced analyst-stage `TradingAgentsFlow` so live runs now create CrewAI traces before the full end-to-end implementation.
 - [x] (2026-05-23 14:20Z) Read `tests/eval_cases/trading_agent_eval_cases.yaml` and noted the expected evidence categories, risk concerns, and unacceptable failure modes.
-- [ ] Ensure plans 01, 02, and 03 have been implemented.
+- [x] (2026-05-26 00:00Z) Renumbered this file from plan 04 to plan 07 after splitting the former combined decision-stage plan into four crew-specific plans.
+- [ ] Ensure plans 01, 02, 03, 04, 05, and 06 have been implemented.
 - [ ] Extend the current analyst-stage `TradingAgentsFlow` into the full end-to-end TradingAgents flow.
 - [ ] Add output persistence for every stage.
 - [ ] Add mocked end-to-end tests.
 - [ ] Add evaluation checks using `tests/eval_cases/trading_agent_eval_cases.yaml`.
 - [ ] Run the final smoke tests and record outputs here.
-- [ ] Apply the runtime conventions proven in plan 02 and required by plan 03: load `.env` with `load_dotenv()` before live execution, preserve `gpt-4o-mini` as the default agent LLM in crew YAML, use task-level tools when one agent performs tool-specific tasks, and enable tracing on the flow and every crew invocation.
+- [ ] Apply the runtime conventions proven in plan 02 and required by plans 03 through 06: load `.env` with `load_dotenv()` before live execution, preserve `gpt-4o-mini` as the default agent LLM in crew YAML, use task-level tools when one agent performs tool-specific tasks, and enable tracing on the flow and every crew invocation.
 
 ## Surprises & Discoveries
 
@@ -68,9 +69,12 @@ This plan depends on the prior plans:
 
 - `plans/01_foundation_and_market_tools.md` for installability and tools.
 - `plans/02_analyst_crew.md` for the four analyst reports.
-- `plans/03_debate_trader_risk_and_portfolio_crews.md` for research, trader, risk, and portfolio stage helpers.
+- `plans/03_research_crew.md` for the research-stage debate and investment plan helper.
+- `plans/04_trader_crew.md` for the trader-stage plan helper.
+- `plans/05_risk_management_crew.md` for the risk-stage debate helper.
+- `plans/06_portfolio_crew.md` for the final portfolio approval helper.
 
-The current `src/trading_agents/main.py` defines `TradingAgentsState`, a traced `TradingAgentsFlow`, and functions `kickoff`, `plot`, and `run_with_trigger`. The interim flow runs the implemented analyst stage and writes four analyst report artifacts. Plan 04 still needs to extend this flow with research, trader, risk, portfolio, final output mapping, and evaluation checks.
+The current `src/trading_agents/main.py` defines `TradingAgentsState`, a traced `TradingAgentsFlow`, and functions `kickoff`, `plot`, and `run_with_trigger`. The interim flow runs the implemented analyst stage and writes four analyst report artifacts. This plan now sits after the four dedicated crew plans and still needs to extend the flow with research, trader, risk, portfolio, final output mapping, and evaluation checks.
 
 Definitions:
 
@@ -271,3 +275,6 @@ The main flow should import only stage helper functions, not individual agent in
 Revision Note: 2026-05-23 14:20Z Initial ExecPlan drafted after reading the README flow contract, current placeholder `main.py`, CrewAI flow guidance, and the available evaluation cases. This plan intentionally makes mocked validation mandatory before live LLM execution.
 
 Revision Note: 2026-05-24 06:57Z Added plan 02 runtime conventions to the unimplemented end-to-end flow: explicit dotenv loading before live runs, preserve `gpt-4o-mini` in crew YAML as the default LLM, and enable tracing on Flow/Crew objects rather than Task objects.
+
+
+Revision Note: 2026-05-26 renumbered this file from plan 04 to plan 07 after splitting the former combined decision-stage plan into four crew-specific plans for sequential implementation.

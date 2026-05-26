@@ -1,0 +1,154 @@
+# Implement the Research Crew
+
+This ExecPlan is a living document. The sections `Progress`, `Surprises & Discoveries`, `Decision Log`, and `Outcomes & Retrospective` must be kept up to date as work proceeds.
+
+This repository contains `PLANS.md` at the project root. Maintain this document according to `PLANS.md`.
+
+## Purpose / Big Picture
+
+After this change, the project can turn the four analyst reports into a structured investment debate and a research-stage investment plan. A user should be able to inspect a bull argument, a bear argument, the debate history built from both, and the final research manager decision before any trader, risk, or portfolio logic runs.
+
+This plan is intentionally limited to one crew. The goal is to finish coding, prompting, integration, debugging, optimization, and testing for the Research Crew before starting the Trader Crew.
+
+## Progress
+
+- [x] (2026-05-23 14:20Z) Read `README.md`, including the Research Crew requirements.
+- [x] (2026-05-23 14:20Z) Reviewed upstream TradingAgents source summaries for bull researcher, bear researcher, and research manager behavior.
+- [x] (2026-05-23 14:20Z) Read CrewAI guidance already used in plan 02 for YAML-backed crews, sequential execution, task-level integration, and traced runs.
+- [ ] Confirm `plans/02_analyst_crew.md` has produced the four report outputs consumed here.
+- [ ] Add the shared research-stage schema and stage helper.
+- [ ] Implement `research_crew` with prompts, debate-history handling, and manager synthesis.
+- [ ] Add mocked config and contract tests for the research stage.
+- [ ] Run focused tests and one small smoke helper, then record the results here.
+- [ ] Preserve the runtime conventions established in plan 02: `load_dotenv()` before live runs, `llm: gpt-4o-mini` in YAML, and `tracing=True` on the crew.
+
+## Surprises & Discoveries
+
+- Observation: The README requires iterative debate rounds, while CrewAI tasks remain easiest to reason about as fixed units.
+  Evidence: The analyst crew in `src/trading_agents/crews/analyst_crew/analyst_crew.py` uses a fixed sequential crew successfully; iterative behavior will need to live in a Python stage helper rather than in dynamic task construction.
+- Observation: The upstream research manager uses a five-level investment rating instead of a binary output.
+  Evidence: The earlier combined plan captured the rating scale `Buy`, `Overweight`, `Hold`, `Underweight`, `Sell`; that richer output belongs in the research stage and should not be flattened prematurely.
+- Observation: Plan 02 already established working repository conventions for dotenv loading and tracing.
+  Evidence: `src/trading_agents/crews/analyst_crew/analyst_crew.py` calls `load_dotenv()` and returns `Crew(..., tracing=True, verbose=True)`.
+
+## Decision Log
+
+- Decision: Split the former combined decision-stage plan into one plan per crew.
+  Rationale: The user wants research, trader, risk, and portfolio work implemented and validated sequentially rather than in one large batch.
+  Date/Author: 2026-05-26 / Codex
+- Decision: Add the first shared schema in this plan by creating `InvestmentPlan` in `src/trading_agents/schemas.py`.
+  Rationale: The Research Crew is the first stage that emits structured data consumed by later crews, so the shared schema should begin here.
+  Date/Author: 2026-05-26 / Codex
+- Decision: Use a deterministic `HAS_MORE: yes` or `HAS_MORE: no` trailer in bull and bear debate outputs.
+  Rationale: Empty-response stop conditions are brittle and difficult to test; an explicit trailer is easier to parse and mock.
+  Date/Author: 2026-05-26 / Codex
+- Decision: Keep `gpt-4o-mini` as the YAML default and enable `tracing=True` on the crew.
+  Rationale: This matches the already-implemented analyst stage and avoids introducing a second runtime pattern.
+  Date/Author: 2026-05-26 / Codex
+
+## Outcomes & Retrospective
+
+This plan is not implemented yet. The expected outcome is a single runnable research-stage helper that accepts analyst reports and returns a stable `investment_plan` plus debate history. Update this section after implementation and validation.
+
+## Context and Orientation
+
+The current repository already implements the analyst stage in `src/trading_agents/crews/analyst_crew/analyst_crew.py` and wires it into a traced analyst-only flow in `src/trading_agents/main.py`. That analyst stage returns four string reports under these keys:
+
+    fundamentals_report
+    sentiment_report
+    news_report
+    market_report
+
+This plan adds the next stage only. Create a new directory:
+
+    src/trading_agents/crews/research_crew/
+
+That directory should contain `research_crew.py` and a `config/` folder with `agents.yaml` and `tasks.yaml`, following the same repository pattern used by the analyst crew.
+
+A debate history in this repository is a plain text transcript assembled in execution order. A stage helper is a small Python function that prepares inputs, runs a crew one or more times, and returns stable keys to the caller. A structured output is a Pydantic model that downstream code can consume without scraping prose.
+
+## Plan of Work
+
+First, create or extend `src/trading_agents/schemas.py` with one small model:
+
+    class InvestmentPlan(BaseModel):
+        rating: Literal["Buy", "Overweight", "Hold", "Underweight", "Sell"]
+        thesis: str
+        supporting_evidence: list[str]
+        key_risks: list[str]
+        recommended_action: str
+
+Second, implement `src/trading_agents/crews/research_crew/research_crew.py`. Import and call `load_dotenv()` near the top of the module. Define `ResearchCrew` with three agents named `bull_researcher`, `bear_researcher`, and `research_manager`, and three tasks named `bull_research`, `bear_research`, and `research_management`. Keep the crew sequential and traced.
+
+Third, implement `run_research_stage(inputs, max_rounds=2)`. That helper should validate that all four analyst reports are present, initialize an empty `debate_history`, and then loop through bull and bear turns in order. Each turn should receive the four analyst reports plus the current debate history. After each turn, append the raw response to `debate_history`. Stop early only when both sides have emitted `HAS_MORE: no` within the current round. After each completed round, run the research manager task to produce the latest `InvestmentPlan`. The helper should return at least:
+
+    {
+        "debate_history": "...",
+        "investment_plan": "...",
+    }
+
+If structured parsing works reliably with CrewAI for this model, return the parsed object or its serialized form consistently. If structured parsing proves unstable, keep the task prompt strongly structured and document the fallback serialization in this plan.
+
+Fourth, write the prompts in `src/trading_agents/crews/research_crew/config/agents.yaml` and `src/trading_agents/crews/research_crew/config/tasks.yaml`. The bull prompt should argue for upside, rebut the bear case, and end with the `HAS_MORE` trailer. The bear prompt should argue downside, rebut the bull case, and end with the same trailer. The manager prompt should synthesize the transcript and analyst evidence into the `InvestmentPlan` structure without inventing missing evidence.
+
+Fifth, add focused tests. Create:
+
+    tests/test_research_crew_config.py
+    tests/test_research_stage_contracts.py
+
+The config test should verify that YAML keys match crew methods and that task-to-agent bindings are correct. The contract test should mock crew outputs to prove that the helper accumulates debate history in order, respects the `HAS_MORE` stop rule, and returns a stable `investment_plan` key.
+
+Sixth, add a small smoke entry point only if needed, for example `src/trading_agents/dev_smoke_research_stage.py`, that feeds local sample analyst reports into `run_research_stage` and prints the resulting keys. Keep it independent from the later trader, risk, and portfolio stages.
+
+## Concrete Steps
+
+Run commands from `/app/trading_agents`.
+
+1. Confirm the analyst helper exists:
+
+       uv run python -c "from trading_agents.crews.analyst_crew.analyst_crew import run_analyst_stage; print(run_analyst_stage.__name__)"
+
+2. Create the research crew files and shared schema file if they do not exist yet:
+
+       src/trading_agents/schemas.py
+       src/trading_agents/crews/research_crew/research_crew.py
+       src/trading_agents/crews/research_crew/config/agents.yaml
+       src/trading_agents/crews/research_crew/config/tasks.yaml
+
+3. Add the focused tests:
+
+       tests/test_research_crew_config.py
+       tests/test_research_stage_contracts.py
+
+4. Run the research-stage test suite:
+
+       uv run pytest tests/test_research_crew_config.py tests/test_research_stage_contracts.py
+
+   Expected success:
+
+       passed
+
+5. If a smoke helper is added, run it with local sample inputs:
+
+       uv run python -m trading_agents.dev_smoke_research_stage
+
+   Expected behavior: the script prints that it produced `debate_history` and `investment_plan`.
+
+## Validation and Acceptance
+
+Acceptance requires all of the following behaviors:
+
+- The new `research_crew` package imports successfully.
+- The YAML task `agent` values reference local agent keys that exist in `agents.yaml`.
+- `run_research_stage` rejects missing analyst reports with a clear error before any live LLM work starts.
+- The research stage builds an ordered `debate_history` transcript from bull and bear outputs.
+- The research stage returns an `investment_plan` derived from the four analyst reports plus the debate transcript.
+- Mocked tests pass without network or live LLM calls.
+
+If the manager output uses structured parsing, add one contract test that proves the parsed object contains the expected rating and thesis fields. If the manager output uses free text, document the exact returned string contract in the tests and in this file.
+
+## Idempotence and Recovery
+
+All work in this plan is additive. The stage helper can be run repeatedly with the same mock inputs. If a round-loop bug appears, fix the helper and rerun the focused tests; no external state should need cleanup. Any optional debug output should live under `output/debug/` and be safe to overwrite.
+
+Revision Note: 2026-05-26 split the former combined plan 03 into a dedicated Research Crew plan so the decision-stage work can proceed one crew at a time.
