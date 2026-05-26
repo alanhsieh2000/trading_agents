@@ -15,7 +15,7 @@ This plan is intentionally limited to one crew. The goal is to finish coding, pr
 - [x] (2026-05-23 14:20Z) Read `README.md`, including the Research Crew requirements.
 - [x] (2026-05-23 14:20Z) Reviewed upstream TradingAgents source summaries for bull researcher, bear researcher, and research manager behavior.
 - [x] (2026-05-23 14:20Z) Read CrewAI guidance already used in plan 02 for YAML-backed crews, sequential execution, task-level integration, and traced runs.
-- [ ] Confirm `plans/02_analyst_crew.md` has produced the four report outputs consumed here.
+- [x] (2026-05-26 06:02Z) Confirmed the analyst stage exposes the four consumed outputs: market_report, sentiment_report, news_report, and fundamentals_report, based on the implemented extraction map and the passing analyst-stage contract tests.
 - [x] (2026-05-26 05:51Z) Added the shared research-stage schema and implemented the stage helper.
 - [x] (2026-05-26 05:51Z) Implemented the research crew with prompts, debate-history handling, and manager synthesis.
 - [x] (2026-05-26 05:51Z) Added mocked config and contract tests for the research stage.
@@ -32,6 +32,8 @@ This plan is intentionally limited to one crew. The goal is to finish coding, pr
   Evidence: `src/trading_agents/crews/analyst_crew/analyst_crew.py` calls `load_dotenv()` and returns `Crew(..., tracing=True, verbose=True)`.
 - Observation: CrewAI 1.14.5 in this repository matches the latest PyPI release, and task-level structured output is stable enough for the research manager contract.
   Evidence: The local version check returned 1.14.5, PyPI reported 1.14.5 as current, and the config test asserts structured output on the manager task.
+- Observation: The remaining unchecked plan item was satisfied by analyst-stage contract verification rather than by a new live run.
+  Evidence: `uv run pytest tests/test_analyst_crew_config.py -q` passed with 13 tests, including assertions that `run_analyst_stage` returns `market_report`, `sentiment_report`, `news_report`, and `fundamentals_report`.
 
 ## Decision Log
 
