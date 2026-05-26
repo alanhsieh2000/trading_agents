@@ -16,11 +16,11 @@ This plan is intentionally limited to one crew. The goal is to finish coding, pr
 - [x] (2026-05-23 14:20Z) Reviewed upstream TradingAgents source summaries for bull researcher, bear researcher, and research manager behavior.
 - [x] (2026-05-23 14:20Z) Read CrewAI guidance already used in plan 02 for YAML-backed crews, sequential execution, task-level integration, and traced runs.
 - [ ] Confirm `plans/02_analyst_crew.md` has produced the four report outputs consumed here.
-- [ ] Add the shared research-stage schema and stage helper.
-- [ ] Implement `research_crew` with prompts, debate-history handling, and manager synthesis.
-- [ ] Add mocked config and contract tests for the research stage.
-- [ ] Run focused tests and one small smoke helper, then record the results here.
-- [ ] Preserve the runtime conventions established in plan 02: `load_dotenv()` before live runs, `llm: gpt-4o-mini` in YAML, and `tracing=True` on the crew.
+- [x] (2026-05-26 05:51Z) Added the shared research-stage schema and implemented the stage helper.
+- [x] (2026-05-26 05:51Z) Implemented the research crew with prompts, debate-history handling, and manager synthesis.
+- [x] (2026-05-26 05:51Z) Added mocked config and contract tests for the research stage.
+- [x] (2026-05-26 05:51Z) Ran the focused research-stage pytest suite and recorded 9 passing tests.
+- [x] (2026-05-26 05:51Z) Preserved the runtime conventions from plan 02: dotenv loading, gpt-4o-mini YAML defaults, and traced crew execution.
 
 ## Surprises & Discoveries
 
@@ -30,6 +30,8 @@ This plan is intentionally limited to one crew. The goal is to finish coding, pr
   Evidence: The earlier combined plan captured the rating scale `Buy`, `Overweight`, `Hold`, `Underweight`, `Sell`; that richer output belongs in the research stage and should not be flattened prematurely.
 - Observation: Plan 02 already established working repository conventions for dotenv loading and tracing.
   Evidence: `src/trading_agents/crews/analyst_crew/analyst_crew.py` calls `load_dotenv()` and returns `Crew(..., tracing=True, verbose=True)`.
+- Observation: CrewAI 1.14.5 in this repository matches the latest PyPI release, and task-level structured output is stable enough for the research manager contract.
+  Evidence: The local version check returned 1.14.5, PyPI reported 1.14.5 as current, and the config test asserts structured output on the manager task.
 
 ## Decision Log
 
@@ -45,10 +47,13 @@ This plan is intentionally limited to one crew. The goal is to finish coding, pr
 - Decision: Keep `gpt-4o-mini` as the YAML default and enable `tracing=True` on the crew.
   Rationale: This matches the already-implemented analyst stage and avoids introducing a second runtime pattern.
   Date/Author: 2026-05-26 / Codex
+- Decision: Return investment_plan as a serialized dictionary derived from InvestmentPlan rather than a raw markdown string.
+  Rationale: Downstream crews need stable fields, and task-level structured output made that contract reliable enough to test directly.
+  Date/Author: 2026-05-26 / Codex
 
 ## Outcomes & Retrospective
 
-This plan is not implemented yet. The expected outcome is a single runnable research-stage helper that accepts analyst reports and returns a stable `investment_plan` plus debate history. Update this section after implementation and validation.
+The research-stage helper is implemented. run_research_stage validates the four analyst reports, runs bull and bear turns round by round, accumulates an ordered plain-text transcript, and returns a serialized investment_plan dictionary derived from InvestmentPlan. The focused mocked suite passed with 9 tests, validating crew wiring, the HAS_MORE stop rule, transcript ordering, and the manager output contract. A live multi-stage smoke run remains deferred until later flow integration work.
 
 ## Context and Orientation
 
@@ -152,3 +157,5 @@ If the manager output uses structured parsing, add one contract test that proves
 All work in this plan is additive. The stage helper can be run repeatedly with the same mock inputs. If a round-loop bug appears, fix the helper and rerun the focused tests; no external state should need cleanup. Any optional debug output should live under `output/debug/` and be safe to overwrite.
 
 Revision Note: 2026-05-26 split the former combined plan 03 into a dedicated Research Crew plan so the decision-stage work can proceed one crew at a time.
+
+Revision Note: 2026-05-26 updated progress, discoveries, decisions, and outcomes after implementing and validating the research crew milestone.

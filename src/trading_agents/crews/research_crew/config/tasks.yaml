@@ -1,0 +1,116 @@
+bull_research:
+  name: bull_research
+  description: |
+    You are presenting the bull case for {ticker}.
+
+    Use all four analyst reports plus the current debate transcript.
+
+    <market_report>
+    {market_report}
+    </market_report>
+
+    <sentiment_report>
+    {sentiment_report}
+    </sentiment_report>
+
+    <news_report>
+    {news_report}
+    </news_report>
+
+    <fundamentals_report>
+    {fundamentals_report}
+    </fundamentals_report>
+
+    <debate_history>
+    {debate_history}
+    </debate_history>
+
+    Write the strongest evidence-based upside argument you can. If the transcript
+    already contains bear objections, rebut the most important ones directly.
+    End with exactly one trailer line:
+    HAS_MORE: yes
+    or
+    HAS_MORE: no
+  expected_output: |
+    A concise but specific markdown argument for the upside case with explicit
+    references to the analyst reports and debate transcript, ending with exactly
+    one trailer line of either HAS_MORE: yes or HAS_MORE: no.
+  agent: bull_researcher
+  markdown: true
+
+bear_research:
+  name: bear_research
+  description: |
+    You are presenting the bear case for {ticker}.
+
+    Use all four analyst reports plus the current debate transcript.
+
+    <market_report>
+    {market_report}
+    </market_report>
+
+    <sentiment_report>
+    {sentiment_report}
+    </sentiment_report>
+
+    <news_report>
+    {news_report}
+    </news_report>
+
+    <fundamentals_report>
+    {fundamentals_report}
+    </fundamentals_report>
+
+    <debate_history>
+    {debate_history}
+    </debate_history>
+
+    Write the strongest evidence-based downside argument you can. If the transcript
+    already contains bull claims, rebut the most important ones directly.
+    End with exactly one trailer line:
+    HAS_MORE: yes
+    or
+    HAS_MORE: no
+  expected_output: |
+    A concise but specific markdown argument for the downside case with explicit
+    references to the analyst reports and debate transcript, ending with exactly
+    one trailer line of either HAS_MORE: yes or HAS_MORE: no.
+  agent: bear_researcher
+  markdown: true
+
+research_management:
+  name: research_management
+  description: |
+    Review the four analyst reports and the full debate transcript for {ticker}.
+
+    <market_report>
+    {market_report}
+    </market_report>
+
+    <sentiment_report>
+    {sentiment_report}
+    </sentiment_report>
+
+    <news_report>
+    {news_report}
+    </news_report>
+
+    <fundamentals_report>
+    {fundamentals_report}
+    </fundamentals_report>
+
+    <debate_history>
+    {debate_history}
+    </debate_history>
+
+    Produce a structured investment plan. Use only evidence present in the analyst
+    reports or the debate transcript. Do not invent missing support.
+  expected_output: |
+    Return an investment plan with:
+    - rating: one of Buy, Overweight, Hold, Underweight, Sell
+    - thesis: a concise investment thesis
+    - supporting_evidence: a list of concrete evidence points
+    - key_risks: a list of concrete risks
+    - recommended_action: a clear next action for the trading stage
+  agent: research_manager
+  markdown: true
