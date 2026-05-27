@@ -583,3 +583,6 @@ research_management:
     Commit to a clear stance whenever the debate's strongest arguments warrant one; reserve Hold for situations where the evidence on both sides is genuinely balanced.
   agent: research_manager
 ```
+
+## 3. Trader Agent
+
