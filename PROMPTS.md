@@ -586,3 +586,92 @@ research_management:
 
 ## 3. Trader Agent
 
+The trader agent crew has one agent and one tasks. 
+
+The original implementation use this system prompt:
+
+```The original system prompt
+You are a trading agent analyzing market data to make investment decisions. Based on your analysis, provide a specific recommendation to buy, sell, or hold. Anchor your reasoning in the analysts' reports and the research plan.
+```
+
+and this user prompt:
+
+```The original user prompt
+Based on a comprehensive analysis by a team of analysts, here is an investment plan tailored for {ticker}. The instrument to analyze is {ticker}. Use this exact ticker in every tool call, report, and recommendation, preserving any exchange suffix (e.g. `.TO`, `.L`, `.HK`, `.T`, `-USD`). This plan incorporates insights from current technical market trends, macroeconomic indicators, and social media sentiment. Use this plan as a foundation for evaluating your next trading decision.
+
+Proposed Investment Plan: {investment_plan}
+
+Leverage these insights to make an informed and strategic decision.
+```
+
+The pydantic type for the trader plan is:
+
+```TraderProposal & TraderAction
+class TraderAction(str, Enum):
+    """3-tier transaction direction used by the Trader."""
+
+    BUY = "Buy"
+    HOLD = "Hold"
+    SELL = "Sell"
+
+class TraderProposal(BaseModel):
+    """Structured transaction proposal produced by the Trader."""
+
+    action: TraderAction = Field(
+        description="The transaction direction. Exactly one of Buy / Hold / Sell.",
+    )
+    reasoning: str = Field(
+        description=(
+            "The case for this action, anchored in the analysts' reports and "
+            "the research plan. Two to four sentences."
+        ),
+    )
+    entry_price: Optional[float] = Field(
+        default=None,
+        description="Optional entry price target in the instrument's quote currency.",
+    )
+    stop_loss: Optional[float] = Field(
+        default=None,
+        description="Optional stop-loss price in the instrument's quote currency.",
+    )
+    position_sizing: Optional[str] = Field(
+        default=None,
+        description="Optional sizing guidance, e.g. '5% of portfolio'.",
+    )
+```
+
+The role, goal, and backstory becomes:
+```within agents.yaml
+trader_agent:
+  role: >
+    a trading agent.
+  goal: >
+    analyzing market data to make investment decisions. The instrument to analyze is {ticker}. Use this exact ticker in every tool call, report, and recommendation, preserving any exchange suffix (e.g. `.TO`, `.L`, `.HK`, `.T`, `-USD`).
+  backstory: >
+    Based on your analysis, provide a specific recommendation to buy, sell, or hold. Anchor your reasoning in the analysts' reports and the research plan.
+```
+
+The description and expected output becomes:
+
+```within tasks.yaml
+trader_decision:
+  name: trader_decision
+  description: |
+    Based on a comprehensive analysis by a team of analysts, here is an investment plan tailored for {ticker}.
+
+    This plan incorporates insights from current technical market trends, macroeconomic indicators, and social media sentiment. Use this plan as a foundation for evaluating your next trading decision.
+
+    Proposed Investment Plan: {investment_plan}
+
+    Leverage these insights to make an informed and strategic decision.
+  expected_output: |
+    **Trader Action** (use exactly one):
+    - **Buy**: Strong conviction in the bull thesis; recommend taking or growing the position
+    - **Hold**: Balanced view; recommend maintaining the current position
+    - **Sell**: Strong conviction in the bear thesis; recommend exiting or avoiding the position
+
+    Turn the investment plan into a concrete transaction: what action to take, the reasoning that justifies it, and the practical levels for entry, stop-loss, and sizing.
+  agent: trader_agent
+```
+
+We choose to make the Trager Agent a crew rather than a single agent with a single task. That will give us the flexibility to add self-reflection in the future. The output of the trader agent crew is a trader plan, which is well structured, we need to use output_pydantic=TraderProposal for the Task instance.
