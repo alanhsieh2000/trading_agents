@@ -194,7 +194,7 @@ The output of this task is investment plan.
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/trader/trader.py"
 
-The output of this task is trader plan.
+The output of this task is a trader plan structured as `TraderProposal`.
 
 ### 4. Risk Management Team
 
@@ -298,16 +298,28 @@ history. The main flow saves the research outputs to the run output directory as
 
 ### 3. Trader Crew
 
-This crew consists of one agent and three tasks:
-- Trader Agent for initial trader plan
-- Trader Agent for self-reflection on the initial trader plan
-- Trader Agent for final trader plan
+This crew consists of one agent and one task:
+- Trader Agent for `trader_decision`
 
 The input to this crew is:
+- ticker
 - investment plan
+
+The ticker must be used exactly as provided in every prompt, report, and
+recommendation, preserving any exchange suffix such as `.TO`, `.L`, `.HK`, `.T`,
+or `-USD`.
 
 The outputs of this crew are:
 - trader plan
+
+The trader plan is structured as `TraderProposal` with:
+- action: exactly one of `Buy`, `Hold`, or `Sell`
+- reasoning: two to four sentences anchored in the analyst reports and research plan
+- entry_price: optional entry target in the instrument's quote currency
+- stop_loss: optional stop-loss price in the instrument's quote currency
+- position_sizing: optional sizing guidance
+
+The `trader_decision` task should use `output_pydantic=TraderProposal`.
 
 ### 4. Risk Management Crew
 

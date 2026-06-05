@@ -6,7 +6,7 @@ This repository contains `PLANS.md` at the project root. Maintain this document 
 
 ## Purpose / Big Picture
 
-After this change, the project can turn a completed research-stage investment plan into a trader-stage transaction proposal with an explicit self-critique step and a final trader output. A user should be able to inspect how the trader moved from the research decision into an actionable `BUY`, `HOLD`, or `SELL` plan before any risk debate begins.
+After this change, the project can turn a completed research-stage investment plan into a trader-stage transaction proposal. The Trader Crew has one trading agent and one `trader_decision` task that emits a structured trader plan, represented by `TraderProposal`, before any risk debate begins.
 
 This plan is intentionally limited to one crew. The goal is to finish coding, prompting, integration, debugging, optimization, and testing for the Trader Crew before starting the Risk Management Crew.
 
@@ -15,39 +15,40 @@ This plan is intentionally limited to one crew. The goal is to finish coding, pr
 - [x] (2026-05-23 14:20Z) Read `README.md`, including the Trader Crew requirements.
 - [x] (2026-05-23 14:20Z) Reviewed upstream trader-stage source summaries and the earlier combined decision-stage plan notes.
 - [x] (2026-05-26 00:00Z) Split the former combined decision-stage plan so Trader work can proceed independently after Research Crew completion.
+- [x] (2026-06-05 00:00Z) Reconciled this plan with `PROMPTS.md`: the trader stage is now one agent, one task, and a `TraderProposal` structured output.
 - [ ] Confirm `plans/03_research_crew.md` has produced a stable `investment_plan` output.
 - [ ] Extend shared schemas with the trader-stage contract.
-- [ ] Implement `trader_crew` with three sequential trader tasks.
+- [ ] Implement `trader_crew` with one `trader_decision` task.
 - [ ] Add mocked config and contract tests for the trader stage.
 - [ ] Run focused tests and one small smoke helper, then record the results here.
 - [ ] Preserve the runtime conventions established in plan 02 and plan 03: `load_dotenv()` before live runs, `llm: gpt-4o-mini` in YAML, and `tracing=True` on the crew.
 
 ## Surprises & Discoveries
 
-- Observation: The upstream TradingAgents source can collapse trader reasoning into a single structured call, but the local README requires three tasks.
-  Evidence: The earlier combined plan documented that the local product spec expects `initial_trader_plan`, `trader_self_reflection`, and `final_trader_plan`, which gives a clearer audit trail than one opaque call.
-- Observation: The trader stage depends on both the research result and the original analyst evidence.
-  Evidence: The combined plan notes say the self-reflection task should check whether the proposal is grounded in the analyst reports and the research plan, so this stage cannot be defined as a pure transformation of only the rating.
+- Observation: `PROMPTS.md` is the current source of truth for the trader stage and specifies one agent with one task.
+  Evidence: `PROMPTS.md` defines `trader_agent`, `trader_decision`, and `output_pydantic=TraderProposal`; it does not define `initial_trader_plan`, `trader_self_reflection`, or `final_trader_plan`.
+- Observation: The trader task consumes the research-stage `investment_plan` as its direct input.
+  Evidence: The prompt text says the investment plan incorporates current technical market trends, macroeconomic indicators, and social media sentiment, then asks the trader to use that plan as the foundation for the next trading decision.
 
 ## Decision Log
 
-- Decision: Keep the Trader Crew as one agent with three tasks instead of multiple agents.
-  Rationale: The repository README already defines the trader stage that way, and a single agent with self-reflection is easier to test than debate-style multi-agent behavior.
-  Date/Author: 2026-05-26 / Codex
-- Decision: Add `TraderPlan` to `src/trading_agents/schemas.py` in this plan.
-  Rationale: This is the first stage that needs the trader-specific output contract, and later plans should consume it rather than redefining it.
-  Date/Author: 2026-05-26 / Codex
-- Decision: Preserve access to the analyst reports during self-reflection and finalization.
-  Rationale: The trader output should stay evidence-backed instead of drifting into a summary of the research manager's prose alone.
-  Date/Author: 2026-05-26 / Codex
+- Decision: Keep the Trader Crew as one agent with one task.
+  Rationale: `PROMPTS.md` now defines the trader stage as a single structured decision task while keeping it as a crew so self-reflection can be added later if needed.
+  Date/Author: 2026-06-05 / Codex
+- Decision: Add `TraderAction` and `TraderProposal` to `src/trading_agents/schemas.py` in this plan.
+  Rationale: `PROMPTS.md` specifies the trader-stage output contract as a Pydantic model with action, reasoning, optional entry price, optional stop loss, and optional position sizing.
+  Date/Author: 2026-06-05 / Codex
+- Decision: Use `output_pydantic=TraderProposal` on the `trader_decision` task.
+  Rationale: The trader output should be machine-readable for the later risk and portfolio stages instead of relying on free-text parsing.
+  Date/Author: 2026-06-05 / Codex
 
 ## Outcomes & Retrospective
 
-This plan is not implemented yet. The expected outcome is a single runnable trader-stage helper that accepts analyst reports plus a research-stage investment plan and returns a stable `trader_plan`. Update this section after implementation and validation.
+This plan is not implemented yet. The expected outcome is a single runnable trader-stage helper that accepts a ticker plus a research-stage investment plan and returns a stable `trader_plan` represented by `TraderProposal`. Update this section after implementation and validation.
 
 ## Context and Orientation
 
-By the time this plan starts, the repository should already contain the analyst stage from `plans/02_analyst_crew.md` and the research stage from `plans/03_research_crew.md`. Those earlier stages provide the four analyst reports plus the `investment_plan` that the trader stage consumes.
+By the time this plan starts, the repository should already contain the analyst stage from `plans/02_analyst_crew.md` and the research stage from `plans/03_research_crew.md`. Those earlier stages provide the `investment_plan` that the trader stage consumes.
 
 Create a new directory:
 
@@ -55,38 +56,44 @@ Create a new directory:
 
 That directory should contain `trader_crew.py` and a `config/` folder with `agents.yaml` and `tasks.yaml`, matching the repository pattern used by the analyst crew and the planned research crew.
 
-In this repository, a self-reflection task means the same agent critiques its own earlier output and then improves it in a later task. The trader plan is the stage output that later feeds the risk debate.
+The trader plan is the stage output that later feeds the risk debate.
 
 ## Plan of Work
 
 First, extend `src/trading_agents/schemas.py` with:
 
-    class TraderPlan(BaseModel):
-        action: Literal["BUY", "HOLD", "SELL"]
-        rationale: str
-        evidence_used: list[str]
-        risk_controls: list[str]
+    class TraderAction(str, Enum):
+        BUY = "Buy"
+        HOLD = "Hold"
+        SELL = "Sell"
 
-Second, implement `src/trading_agents/crews/trader_crew/trader_crew.py`. Import and call `load_dotenv()` near the top of the module. Define `TraderCrew` with one agent named `trader_agent` and three tasks named `initial_trader_plan`, `trader_self_reflection`, and `final_trader_plan`. Keep the crew sequential and traced.
+    class TraderProposal(BaseModel):
+        action: TraderAction
+        reasoning: str
+        entry_price: Optional[float] = None
+        stop_loss: Optional[float] = None
+        position_sizing: Optional[str] = None
 
-Third, implement `run_trader_stage(inputs)`. That helper should validate the presence of the four analyst reports and the research-stage `investment_plan`, normalize the inputs, kick off the trader crew once, and return at least:
+Second, implement `src/trading_agents/crews/trader_crew/trader_crew.py`. Import and call `load_dotenv()` near the top of the module. Define `TraderCrew` with one agent named `trader_agent` and one task named `trader_decision`. Keep the crew sequential and traced.
+
+Third, implement `run_trader_stage(inputs)`. That helper should validate the presence of `ticker` and the research-stage `investment_plan`, preserve the ticker exactly as provided including exchange suffixes, normalize the other inputs, kick off the trader crew once, and return at least:
 
     {
-        "trader_plan": "...",
+        "trader_plan": TraderProposal(...),
     }
 
-If CrewAI structured output works reliably here, parse the final trader task into `TraderPlan`. If not, make the final prompt strongly structured and document the exact free-text contract plus any fallback parsing behavior.
+Use CrewAI structured output on the `trader_decision` task with `output_pydantic=TraderProposal`. If structured output proves unreliable, keep the Pydantic contract stable and add a narrow fallback parser rather than changing downstream behavior.
 
-Fourth, write the prompts in `src/trading_agents/crews/trader_crew/config/agents.yaml` and `src/trading_agents/crews/trader_crew/config/tasks.yaml`. The initial task should convert the investment plan into a transaction recommendation. The self-reflection task should challenge unsupported claims, weak evidence, and missing risk controls. The final task should emit the definitive `BUY`, `HOLD`, or `SELL` plan in the agreed contract.
+Fourth, write the prompts in `src/trading_agents/crews/trader_crew/config/agents.yaml` and `src/trading_agents/crews/trader_crew/config/tasks.yaml`. The agent key must be `trader_agent`; the task key must be `trader_decision`. The agent goal should instruct the model to analyze `{ticker}` and use that exact ticker in every tool call, report, and recommendation. The task should convert the investment plan into a concrete transaction proposal with exactly one action, reasoning, and practical levels for entry, stop-loss, and sizing.
 
 Fifth, add focused tests. Create:
 
     tests/test_trader_crew_config.py
     tests/test_trader_stage_contracts.py
 
-The config test should verify method names, YAML keys, and task-to-agent bindings. The contract test should mock the final crew output to prove that `run_trader_stage` validates required inputs and returns a stable `trader_plan`.
+The config test should verify method names, YAML keys, task-to-agent bindings, and the `output_pydantic=TraderProposal` task contract. The contract test should mock the final crew output to prove that `run_trader_stage` validates required inputs and returns a stable `trader_plan`.
 
-Sixth, add a small smoke entry point only if needed, for example `src/trading_agents/dev_smoke_trader_stage.py`, that feeds local sample analyst reports and an example investment plan into `run_trader_stage` and prints the resulting keys. Keep it independent from later risk and portfolio logic.
+Sixth, add a small smoke entry point only if needed, for example `src/trading_agents/dev_smoke_trader_stage.py`, that feeds a sample ticker and example investment plan into `run_trader_stage` and prints the resulting keys. Keep it independent from later risk and portfolio logic.
 
 ## Concrete Steps
 
@@ -127,12 +134,12 @@ Acceptance requires all of the following behaviors:
 
 - The new `trader_crew` package imports successfully.
 - The YAML task `agent` values reference local agent keys that exist in `agents.yaml`.
-- `run_trader_stage` rejects missing analyst reports or missing `investment_plan` with a clear error before any live LLM work starts.
+- `run_trader_stage` rejects missing `ticker` or missing `investment_plan` with a clear error before any live LLM work starts.
 - The trader stage returns a stable `trader_plan` contract that later stages can consume.
-- The final trader result contains one of `BUY`, `HOLD`, or `SELL`.
+- The final trader result contains one of `Buy`, `Hold`, or `Sell`.
 - Mocked tests pass without network or live LLM calls.
 
-If the trader result is structured, add one contract test that proves the parsed object preserves action, rationale, and risk controls. If the trader result is free text, document the serialization contract here and in the test file.
+Add one contract test that proves the parsed object preserves action, reasoning, entry price, stop loss, and position sizing.
 
 ## Idempotence and Recovery
 
