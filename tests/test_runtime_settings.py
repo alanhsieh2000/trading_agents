@@ -1,6 +1,7 @@
 from trading_agents.config.settings import (
     ANALYST_INPUT_OVERRIDE_KEYS,
     AnalystRuntimeConfig,
+    ResearchStageSettings,
     get_settings,
     resolve_analyst_runtime_config,
 )
@@ -19,17 +20,20 @@ def test_get_settings_uses_code_defaults(monkeypatch):
     assert settings.sentiment.stocktwits_limit == 30
     assert settings.sentiment.reddit_limit_per_sub == 5
     assert settings.analyst_stage.lookback_days == 7
+    assert settings.research_stage.max_rounds == 1
 
 
 def test_get_settings_honors_environment_overrides(monkeypatch):
     monkeypatch.setenv("TRADING_AGENTS_NEWS__TICKER_LIMIT", "11")
     monkeypatch.setenv("TRADING_AGENTS_ANALYST_STAGE__LOOKBACK_DAYS", "9")
+    monkeypatch.setenv("TRADING_AGENTS_RESEARCH_STAGE__MAX_ROUNDS", "4")
     get_settings.cache_clear()
 
     settings = get_settings()
 
     assert settings.news.ticker_limit == 11
     assert settings.analyst_stage.lookback_days == 9
+    assert settings.research_stage == ResearchStageSettings(max_rounds=4)
 
 
 def test_resolve_analyst_runtime_config_prefers_per_run_overrides(monkeypatch):

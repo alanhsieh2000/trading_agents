@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 load_dotenv()
@@ -18,6 +18,7 @@ os.environ.setdefault("CREWAI_TRACING_ENABLED", "true")
 from crewai.flow import Flow, listen, start  # noqa: E402
 
 from trading_agents.crews.analyst_crew.analyst_crew import run_analyst_stage  # noqa: E402
+from trading_agents.crews.research_crew.research_crew import run_research_stage  # noqa: E402
 
 DEFAULT_TICKER = "NVDA"
 DEFAULT_TRADE_DATE = datetime.now(UTC).strftime("%Y-%m-%d")
@@ -26,6 +27,10 @@ REPORT_FILES = {
     "sentiment_report": "sentiment_report.md",
     "news_report": "news_report.md",
     "market_report": "market_report.md",
+}
+RESEARCH_OUTPUT_FILES = {
+    "debate_history": "debate_history.md",
+    "investment_plan": "investment_plan.md",
 }
 
 
@@ -36,6 +41,8 @@ class TradingAgentsState(BaseModel):
     sentiment_report: str = ""
     news_report: str = ""
     market_report: str = ""
+    debate_history: str = ""
+    investment_plan: dict[str, Any] = Field(default_factory=dict)
     output_dir: str = ""
 
 
@@ -76,9 +83,25 @@ class TradingAgentsFlow(Flow[TradingAgentsState]):
         return reports
 
     @listen(run_analysts)
-    def save_outputs(self, _reports: dict[str, str]) -> dict[str, Any]:
-        output_dir = save_analyst_outputs(self.state)
-        print(f"Analyst reports saved to {output_dir}")
+    def run_research(self, reports: dict[str, str]) -> dict[str, Any]:
+        print(f"Running research stage for {self.state.ticker} on {self.state.trade_date}")
+        research_inputs: dict[str, Any] = {
+            "ticker": self.state.ticker,
+            "trade_date": self.state.trade_date,
+            **reports,
+        }
+        research_outputs = run_research_stage(research_inputs)
+
+        self.state.debate_history = str(research_outputs["debate_history"])
+        self.state.investment_plan = dict(research_outputs["investment_plan"])
+
+        print("Research stage complete")
+        return research_outputs
+
+    @listen(run_research)
+    def save_outputs(self, _research_outputs: dict[str, Any]) -> dict[str, Any]:
+        output_dir = save_outputs(self.state)
+        print(f"TradingAgents outputs saved to {output_dir}")
         return self.state.model_dump()
 
 
@@ -137,15 +160,46 @@ def cli(argv: list[str] | None = None) -> Any:
     flow = TradingAgentsFlow(tracing=True)
     return flow.kickoff(inputs={"crewai_trigger_payload": payload})
 
+def save_outputs(state: TradingAgentsState) -> Path:
+    output_dir = Path(state.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _write_analyst_outputs(state, output_dir)
+
+    (output_dir / RESEARCH_OUTPUT_FILES["debate_history"]).write_text(
+        state.debate_history,
+        encoding="utf-8",
+    )
+    (output_dir / RESEARCH_OUTPUT_FILES["investment_plan"]).write_text(
+        _format_investment_plan(state.investment_plan),
+        encoding="utf-8",
+    )
+
+    return output_dir
+
+
 def save_analyst_outputs(state: TradingAgentsState) -> Path:
     output_dir = Path(state.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    _write_analyst_outputs(state, output_dir)
+    return output_dir
 
+
+def _write_analyst_outputs(state: TradingAgentsState, output_dir: Path) -> None:
     for attribute, file_name in REPORT_FILES.items():
         report = getattr(state, attribute)
         (output_dir / file_name).write_text(report, encoding="utf-8")
 
-    return output_dir
+
+def _format_investment_plan(investment_plan: dict[str, Any]) -> str:
+    if not investment_plan:
+        return ""
+
+    sections = [
+        ("Recommendation", investment_plan.get("recommendation", "")),
+        ("Rationale", investment_plan.get("rationale", "")),
+        ("Strategic Actions", investment_plan.get("strategic_actions", "")),
+    ]
+    return "\n\n".join(f"## {title}\n{value}".rstrip() for title, value in sections) + "\n"
 
 
 def _normalize_payload(payload: dict[str, Any] | None) -> dict[str, Any]:

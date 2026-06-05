@@ -3,13 +3,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any
-import re
 
 from crewai import Agent, Crew, Process, Task
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from crewai.project import CrewBase, agent, task, crew
 from dotenv import load_dotenv
 
+from trading_agents.config import get_settings
 from trading_agents.schemas import InvestmentPlan
 
 
@@ -28,7 +28,6 @@ REQUIRED_REPORT_KEYS = (
     "news_report",
     "fundamentals_report",
 )
-HAS_MORE_PATTERN = re.compile(r"^HAS_MORE:\s*(yes|no)\s*$", re.IGNORECASE | re.MULTILINE)
 
 
 @CrewBase
@@ -94,8 +93,10 @@ class ResearchCrew:
 
 def run_research_stage(
     inputs: Mapping[str, Any],
-    max_rounds: int = 2,
+    max_rounds: int | None = None,
 ) -> dict[str, Any]:
+    if max_rounds is None:
+        max_rounds = get_settings().research_stage.max_rounds
     if max_rounds < 1:
         raise ValueError("Research stage max_rounds must be at least 1.")
 
@@ -104,33 +105,42 @@ def run_research_stage(
     investment_plan: dict[str, Any] | None = None
 
     for _ in range(max_rounds):
-        round_has_more: list[bool] = []
-        debate_history = _format_debate_history(debate_entries)
+        history = _format_debate_history(debate_entries)
+        current_response = debate_entries[-1] if debate_entries else ""
 
         bull_result = _kickoff_research_task(
             "bull_research",
-            {**prepared_inputs, "debate_history": debate_history},
+            {
+                **prepared_inputs,
+                "history": history,
+                "current_response": current_response,
+            },
         )
-        debate_entries.append(_format_turn("bull_research", bull_result.raw))
-        round_has_more.append(_has_more(bull_result.raw))
+        debate_entries.append(_format_turn("Bull Analyst", bull_result.raw))
 
-        debate_history = _format_debate_history(debate_entries)
+        history = _format_debate_history(debate_entries)
+        current_response = debate_entries[-1]
         bear_result = _kickoff_research_task(
             "bear_research",
-            {**prepared_inputs, "debate_history": debate_history},
+            {
+                **prepared_inputs,
+                "history": history,
+                "current_response": current_response,
+            },
         )
-        debate_entries.append(_format_turn("bear_research", bear_result.raw))
-        round_has_more.append(_has_more(bear_result.raw))
+        debate_entries.append(_format_turn("Bear Analyst", bear_result.raw))
 
-        debate_history = _format_debate_history(debate_entries)
+        history = _format_debate_history(debate_entries)
+        current_response = debate_entries[-1]
         manager_result = _kickoff_research_task(
             "research_management",
-            {**prepared_inputs, "debate_history": debate_history},
+            {
+                **prepared_inputs,
+                "history": history,
+                "current_response": current_response,
+            },
         )
         investment_plan = _serialize_investment_plan(manager_result)
-
-        if not any(round_has_more):
-            break
 
     if investment_plan is None:
         raise ValueError("Research stage did not produce an investment plan.")
@@ -149,10 +159,12 @@ def _prepare_research_inputs(inputs: Mapping[str, Any]) -> dict[str, Any]:
             + ", ".join(missing)
         )
     prepared = dict(inputs)
-    prepared["ticker"] = str(inputs.get("ticker") or "UNKNOWN").strip().upper()
+    ticker = str(inputs.get("ticker") or "UNKNOWN").strip()
+    prepared["ticker"] = ticker
     prepared["trade_date"] = str(
         inputs.get("trade_date") or inputs.get("current_date") or ""
     ).strip()
+    prepared["fundamentals_label"] = _fundamentals_label(ticker)
     return prepared
 
 
@@ -196,21 +208,20 @@ def _serialize_investment_plan(result: SimpleNamespace) -> dict[str, Any]:
         raise ValueError("Research manager output did not match InvestmentPlan.") from exc
 
 
-def _format_turn(task_name: str, raw: str) -> str:
+def _format_turn(speaker: str, raw: str) -> str:
     cleaned = str(raw).strip()
-    return f"## {task_name}\n{cleaned}"
+    return f"{speaker}: {cleaned}"
 
 
 def _format_debate_history(entries: list[str]) -> str:
     return "\n\n".join(entries)
 
 
-def _has_more(raw: str) -> bool:
-    match = HAS_MORE_PATTERN.search(str(raw))
-    if match is None:
-        return True
-    return match.group(1).lower() == "yes"
-
-
 def _is_blank(value: Any) -> bool:
     return value is None or str(value).strip() == ""
+
+
+def _fundamentals_label(ticker: str) -> str:
+    if str(ticker).strip().upper().endswith("-USD"):
+        return "Asset fundamentals report (may be unavailable for crypto)"
+    return "Company fundamentals report"

@@ -31,6 +31,10 @@ class AnalystStageSettings(BaseModel):
     lookback_days: int = Field(default=7, ge=0)
 
 
+class ResearchStageSettings(BaseModel):
+    max_rounds: int = Field(default=1, ge=1)
+
+
 class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="TRADING_AGENTS_",
@@ -41,6 +45,7 @@ class AppSettings(BaseSettings):
     news: NewsSettings = NewsSettings()
     sentiment: SentimentSettings = SentimentSettings()
     analyst_stage: AnalystStageSettings = AnalystStageSettings()
+    research_stage: ResearchStageSettings = ResearchStageSettings()
 
 
 ANALYST_INPUT_OVERRIDE_KEYS = (

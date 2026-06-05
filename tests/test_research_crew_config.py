@@ -44,11 +44,19 @@ def test_research_task_agent_references_match_agent_keys():
         assert task_config["markdown"] is True
 
 
-def test_research_debate_prompts_require_has_more_trailer():
+def test_research_debate_prompts_do_not_require_has_more_trailer():
     tasks_yaml = _read_config("tasks.yaml")
 
-    assert "HAS_MORE: yes" in tasks_yaml
-    assert "HAS_MORE: no" in tasks_yaml
+    assert "HAS_MORE" not in tasks_yaml
+
+
+def test_research_prompts_use_prompt_source_placeholders():
+    tasks_yaml = _read_config("tasks.yaml")
+
+    assert "{history}" in tasks_yaml
+    assert "{current_response}" in tasks_yaml
+    assert "{fundamentals_label}" in tasks_yaml
+    assert "{debate_history}" not in tasks_yaml
 
 
 def test_research_tasks_bind_expected_agents_and_manager_output():

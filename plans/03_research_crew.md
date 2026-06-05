@@ -21,6 +21,11 @@ This plan is intentionally limited to one crew. The goal is to finish coding, pr
 - [x] (2026-05-26 05:51Z) Added mocked config and contract tests for the research stage.
 - [x] (2026-05-26 05:51Z) Ran the focused research-stage pytest suite and recorded 9 passing tests.
 - [x] (2026-05-26 05:51Z) Preserved the runtime conventions from plan 02: dotenv loading, gpt-4o-mini YAML defaults, and traced crew execution.
+- [x] (2026-06-05) Replaced the research prompts with the `PROMPTS.md` Research Team wording and removed the explicit `HAS_MORE` trailer contract.
+- [x] (2026-06-05) Updated the research loop so debate length is controlled only by `max_rounds`.
+- [x] (2026-06-05) Moved research debate round tuning to `research_stage.max_rounds` in runtime settings.
+- [x] (2026-06-05) Wired the Research Crew into `TradingAgentsFlow` after the analyst stage and persisted research outputs under the run output directory.
+- [x] (2026-06-05) Set the default research debate length to one round.
 
 ## Surprises & Discoveries
 
@@ -43,19 +48,28 @@ This plan is intentionally limited to one crew. The goal is to finish coding, pr
 - Decision: Add the first shared schema in this plan by creating `InvestmentPlan` in `src/trading_agents/schemas.py`.
   Rationale: The Research Crew is the first stage that emits structured data consumed by later crews, so the shared schema should begin here.
   Date/Author: 2026-05-26 / Codex
-- Decision: Use a deterministic `HAS_MORE: yes` or `HAS_MORE: no` trailer in bull and bear debate outputs.
-  Rationale: Empty-response stop conditions are brittle and difficult to test; an explicit trailer is easier to parse and mock.
-  Date/Author: 2026-05-26 / Codex
+- Decision: Do not ask bull or bear researchers for an explicit stop trailer.
+  Rationale: Each researcher should provide a complete argument for the current turn, using history and the other side's latest response; the debate ends when `max_rounds` is reached.
+  Date/Author: 2026-06-05 / Codex
 - Decision: Keep `gpt-4o-mini` as the YAML default and enable `tracing=True` on the crew.
   Rationale: This matches the already-implemented analyst stage and avoids introducing a second runtime pattern.
   Date/Author: 2026-05-26 / Codex
 - Decision: Return investment_plan as a serialized dictionary derived from InvestmentPlan rather than a raw markdown string.
   Rationale: Downstream crews need stable fields, and task-level structured output made that contract reliable enough to test directly.
   Date/Author: 2026-05-26 / Codex
+- Decision: Resolve the research round count from `settings.py` by default.
+  Rationale: Debate length needs to be tunable through the same runtime configuration surface as analyst-stage limits instead of being hard-coded at call sites.
+  Date/Author: 2026-06-05 / Codex
+- Decision: Default `research_stage.max_rounds` to 1.
+  Rationale: One bull turn and one bear turn should be the baseline; deeper debate can be enabled through runtime configuration when needed.
+  Date/Author: 2026-06-05 / Codex
+- Decision: Persist `debate_history.md` and `investment_plan.md` alongside the analyst reports.
+  Rationale: The research stage is now part of the main flow, and users need the same inspectable artifacts for research outputs as they already have for analyst outputs.
+  Date/Author: 2026-06-05 / Codex
 
 ## Outcomes & Retrospective
 
-The research-stage helper is implemented. run_research_stage validates the four analyst reports, runs bull and bear turns round by round, accumulates an ordered plain-text transcript, and returns a serialized investment_plan dictionary derived from InvestmentPlan. The focused mocked suite passed with 9 tests, validating crew wiring, the HAS_MORE stop rule, transcript ordering, and the manager output contract. A live multi-stage smoke run remains deferred until later flow integration work.
+The research-stage helper is implemented and wired into the main TradingAgents flow. run_research_stage validates the four analyst reports, runs bull and bear turns for exactly the configured maximum rounds, accumulates an ordered plain-text transcript, and returns a serialized investment_plan dictionary derived from InvestmentPlan. The full test suite validates crew wiring, transcript ordering, settings-backed max-round debate control, flow integration, output persistence, and the manager output contract.
 
 ## Context and Orientation
 
@@ -87,7 +101,7 @@ First, create or extend `src/trading_agents/schemas.py` with one small model:
 
 Second, implement `src/trading_agents/crews/research_crew/research_crew.py`. Import and call `load_dotenv()` near the top of the module. Define `ResearchCrew` with three agents named `bull_researcher`, `bear_researcher`, and `research_manager`, and three tasks named `bull_research`, `bear_research`, and `research_management`. Keep the crew sequential and traced.
 
-Third, implement `run_research_stage(inputs, max_rounds=2)`. That helper should validate that all four analyst reports are present, initialize an empty `debate_history`, and then loop through bull and bear turns in order. Each turn should receive the four analyst reports plus the current debate history. After each turn, append the raw response to `debate_history`. Stop early only when both sides have emitted `HAS_MORE: no` within the current round. After each completed round, run the research manager task to produce the latest `InvestmentPlan`. The helper should return at least:
+Third, implement `run_research_stage(inputs, max_rounds=None)`. That helper should validate that all four analyst reports are present, resolve `max_rounds` from `settings.py` when the caller does not provide it, initialize an empty `debate_history`, and then loop through bull and bear turns in order until the round counter reaches `max_rounds`. Each turn should receive the four analyst reports plus the current debate history and the other side's latest response. After each turn, append the raw response to `debate_history`. After each completed round, run the research manager task to produce the latest `InvestmentPlan`. The helper should return at least:
 
     {
         "debate_history": "...",
@@ -96,14 +110,14 @@ Third, implement `run_research_stage(inputs, max_rounds=2)`. That helper should 
 
 If structured parsing works reliably with CrewAI for this model, return the parsed object or its serialized form consistently. If structured parsing proves unstable, keep the task prompt strongly structured and document the fallback serialization in this plan.
 
-Fourth, write the prompts in `src/trading_agents/crews/research_crew/config/agents.yaml` and `src/trading_agents/crews/research_crew/config/tasks.yaml`. The bull prompt should argue for upside, rebut the bear case, and end with the `HAS_MORE` trailer. The bear prompt should argue downside, rebut the bull case, and end with the same trailer. The manager prompt should synthesize the transcript and analyst evidence into the `InvestmentPlan` structure without inventing missing evidence.
+Fourth, write the prompts in `src/trading_agents/crews/research_crew/config/agents.yaml` and `src/trading_agents/crews/research_crew/config/tasks.yaml`. The bull prompt should argue for upside and rebut the bear case. The bear prompt should argue downside and rebut the bull case. The manager prompt should synthesize the transcript into the `InvestmentPlan` structure without inventing missing evidence.
 
 Fifth, add focused tests. Create:
 
     tests/test_research_crew_config.py
     tests/test_research_stage_contracts.py
 
-The config test should verify that YAML keys match crew methods and that task-to-agent bindings are correct. The contract test should mock crew outputs to prove that the helper accumulates debate history in order, respects the `HAS_MORE` stop rule, and returns a stable `investment_plan` key.
+The config test should verify that YAML keys match crew methods and that task-to-agent bindings are correct. The contract test should mock crew outputs to prove that the helper accumulates debate history in order, runs exactly `max_rounds` rounds, and returns a stable `investment_plan` key.
 
 Sixth, add a small smoke entry point only if needed, for example `src/trading_agents/dev_smoke_research_stage.py`, that feeds local sample analyst reports into `run_research_stage` and prints the resulting keys. Keep it independent from the later trader, risk, and portfolio stages.
 

@@ -12,16 +12,30 @@ REPORTS = {
     "news_report": "news text",
     "market_report": "market text",
 }
+RESEARCH_OUTPUTS = {
+    "debate_history": "Bull Analyst: bull text\n\nBear Analyst: bear text",
+    "investment_plan": {
+        "recommendation": "Buy",
+        "rationale": "research rationale",
+        "strategic_actions": "increase exposure",
+    },
+}
 
 
 def test_trading_agents_flow_runs_analyst_stage_with_trigger(monkeypatch, tmp_path):
     captured_inputs = {}
+    captured_research_inputs = {}
 
     def fake_run_analyst_stage(inputs):
         captured_inputs.update(inputs)
         return dict(REPORTS)
 
+    def fake_run_research_stage(inputs):
+        captured_research_inputs.update(inputs)
+        return dict(RESEARCH_OUTPUTS)
+
     monkeypatch.setattr(main_module, "run_analyst_stage", fake_run_analyst_stage)
+    monkeypatch.setattr(main_module, "run_research_stage", fake_run_research_stage)
     monkeypatch.chdir(tmp_path)
 
     flow = main_module.TradingAgentsFlow(tracing=True)
@@ -41,7 +55,13 @@ def test_trading_agents_flow_runs_analyst_stage_with_trigger(monkeypatch, tmp_pa
     assert captured_inputs["ticker"] == "NVDA"
     assert captured_inputs["trade_date"] == "2024-05-24"
     assert captured_inputs["news_sentiment_block"] == "news fixture"
+    assert captured_research_inputs == {
+        "ticker": "NVDA",
+        "trade_date": "2024-05-24",
+        **REPORTS,
+    }
     assert result["ticker"] == "NVDA"
+    assert result["investment_plan"] == RESEARCH_OUTPUTS["investment_plan"]
     assert result["output_dir"] == "output/NVDA_2024-05-24"
 
     output_dir = Path("output/NVDA_2024-05-24")
@@ -49,6 +69,12 @@ def test_trading_agents_flow_runs_analyst_stage_with_trigger(monkeypatch, tmp_pa
     assert (output_dir / "sentiment_report.md").read_text() == "sentiment text"
     assert (output_dir / "news_report.md").read_text() == "news text"
     assert (output_dir / "market_report.md").read_text() == "market text"
+    assert (output_dir / "debate_history.md").read_text() == RESEARCH_OUTPUTS["debate_history"]
+    assert (output_dir / "investment_plan.md").read_text() == (
+        "## Recommendation\nBuy\n\n"
+        "## Rationale\nresearch rationale\n\n"
+        "## Strategic Actions\nincrease exposure\n"
+    )
 
 
 def test_kickoff_uses_default_trading_inputs(monkeypatch, tmp_path):
@@ -58,7 +84,11 @@ def test_kickoff_uses_default_trading_inputs(monkeypatch, tmp_path):
         captured_inputs.update(inputs)
         return dict(REPORTS)
 
+    def fake_run_research_stage(_inputs):
+        return dict(RESEARCH_OUTPUTS)
+
     monkeypatch.setattr(main_module, "run_analyst_stage", fake_run_analyst_stage)
+    monkeypatch.setattr(main_module, "run_research_stage", fake_run_research_stage)
     monkeypatch.chdir(tmp_path)
 
     result = main_module.kickoff()
@@ -119,7 +149,11 @@ def test_invalid_trade_date_stops_before_analyst_stage(monkeypatch):
         called = True
         return dict(REPORTS)
 
+    def fake_run_research_stage(_inputs):
+        raise AssertionError("research stage should not run when inputs are invalid")
+
     monkeypatch.setattr(main_module, "run_analyst_stage", fake_run_analyst_stage)
+    monkeypatch.setattr(main_module, "run_research_stage", fake_run_research_stage)
 
     flow = main_module.TradingAgentsFlow(tracing=True)
     with pytest.raises(ValueError, match="YYYY-MM-DD"):
