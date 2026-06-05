@@ -6,3 +6,4 @@ lib/
 .devcontainer
 skills-lock.json
 output/
+.codex
