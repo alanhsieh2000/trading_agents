@@ -9,7 +9,7 @@ from crewai.agents.agent_builder.base_agent import BaseAgent
 from crewai.project import CrewBase, agent, task, crew
 from dotenv import load_dotenv
 
-from trading_agents.config import get_settings
+from trading_agents.config import get_settings, resolve_agent_config
 from trading_agents.schemas import InvestmentPlan
 
 
@@ -42,15 +42,21 @@ class ResearchCrew:
 
     @agent
     def bull_researcher(self) -> Agent:
-        return Agent(config=self.agents_config["bull_researcher"])  # type: ignore[index]
+        return Agent(
+            config=resolve_agent_config(self.agents_config["bull_researcher"]),  # type: ignore[index]
+        )
 
     @agent
     def bear_researcher(self) -> Agent:
-        return Agent(config=self.agents_config["bear_researcher"])  # type: ignore[index]
+        return Agent(
+            config=resolve_agent_config(self.agents_config["bear_researcher"]),  # type: ignore[index]
+        )
 
     @agent
     def research_manager(self) -> Agent:
-        return Agent(config=self.agents_config["research_manager"])  # type: ignore[index]
+        return Agent(
+            config=resolve_agent_config(self.agents_config["research_manager"]),  # type: ignore[index]
+        )
 
     @task
     def bull_research(self) -> Task:

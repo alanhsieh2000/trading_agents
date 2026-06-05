@@ -35,6 +35,11 @@ class ResearchStageSettings(BaseModel):
     max_rounds: int = Field(default=1, ge=1)
 
 
+class LLMSettings(BaseModel):
+    quick_llm: str = Field(default="gpt-4o-mini", min_length=1)
+    deep_llm: str = Field(default="gpt-4o-mini", min_length=1)
+
+
 class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="TRADING_AGENTS_",
@@ -46,6 +51,7 @@ class AppSettings(BaseSettings):
     sentiment: SentimentSettings = SentimentSettings()
     analyst_stage: AnalystStageSettings = AnalystStageSettings()
     research_stage: ResearchStageSettings = ResearchStageSettings()
+    llm: LLMSettings = LLMSettings()
 
 
 ANALYST_INPUT_OVERRIDE_KEYS = (
@@ -70,6 +76,21 @@ class AnalystRuntimeConfig(BaseModel):
 @lru_cache(maxsize=1)
 def get_settings() -> AppSettings:
     return AppSettings()
+
+
+def resolve_agent_config(agent_config: Mapping[str, Any]) -> dict[str, Any]:
+    resolved = dict(agent_config)
+    llm_level = resolved.pop("llm_level", "quick_llm")
+    llm_settings = get_settings().llm
+
+    if llm_level == "quick_llm":
+        resolved["llm"] = llm_settings.quick_llm
+    elif llm_level == "deep_llm":
+        resolved["llm"] = llm_settings.deep_llm
+    else:
+        raise ValueError(f"Unknown agent llm_level: {llm_level}")
+
+    return resolved
 
 
 def resolve_analyst_runtime_config(inputs: Mapping[str, Any]) -> AnalystRuntimeConfig:

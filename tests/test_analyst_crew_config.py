@@ -43,7 +43,8 @@ def test_analyst_yaml_keys_exist():
 def test_single_analyst_agent_keeps_runtime_settings():
     agent_config = _load_yaml("agents.yaml")["analyst"]
 
-    assert agent_config["llm"] == "gpt-4o-mini"
+    assert agent_config["llm_level"] == "quick_llm"
+    assert "llm" not in agent_config
     assert agent_config["allow_delegation"] is False
     assert agent_config["verbose"] is True
     assert "{ticker}" in agent_config["goal"]
@@ -74,6 +75,15 @@ def test_analyst_agent_has_no_tools():
     agent = AnalystCrew().analyst()
 
     assert agent.tools == []
+
+
+def test_analyst_agent_resolves_quick_llm(monkeypatch):
+    monkeypatch.setenv("TRADING_AGENTS_LLM__QUICK_LLM", "gpt-4o-mini")
+    analyst_module.get_settings.cache_clear()
+
+    agent = AnalystCrew().analyst()
+
+    assert agent.llm.model == "gpt-4o-mini"
 
 
 def test_analyst_tasks_bind_same_agent_and_task_tools():

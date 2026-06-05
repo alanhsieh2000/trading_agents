@@ -10,7 +10,11 @@ from crewai.crews.crew_output import CrewOutput
 from crewai.project import CrewBase, agent, crew, task
 from dotenv import load_dotenv
 
-from trading_agents.config import get_settings, resolve_analyst_runtime_config
+from trading_agents.config import (
+    get_settings,
+    resolve_agent_config,
+    resolve_analyst_runtime_config,
+)
 from trading_agents.tools import (
     fetch_reddit_posts,
     fetch_stocktwits_messages,
@@ -49,7 +53,9 @@ class AnalystCrew:
 
     @agent
     def analyst(self) -> Agent:
-        return Agent(config=self.agents_config["analyst"])  # type: ignore[index]
+        return Agent(
+            config=resolve_agent_config(self.agents_config["analyst"]),  # type: ignore[index]
+        )
 
     @task
     def market_analysis(self) -> Task:

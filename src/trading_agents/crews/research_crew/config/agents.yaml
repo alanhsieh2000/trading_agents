@@ -8,7 +8,7 @@ bull_researcher:
   backstory: >
     Leverage the provided research and data to address concerns and counter bearish
     arguments effectively.
-  llm: gpt-4o-mini
+  llm_level: quick_llm
   allow_delegation: false
   verbose: true
 
@@ -22,7 +22,7 @@ bear_researcher:
   backstory: >
     Leverage the provided research and data to highlight potential downsides and
     counter bullish arguments effectively.
-  llm: gpt-4o-mini
+  llm_level: quick_llm
   allow_delegation: false
   verbose: true
 
@@ -37,6 +37,6 @@ research_manager:
     (e.g. `.TO`, `.L`, `.HK`, `.T`, `-USD`).
   backstory: >
     You are the final research decision-maker.
-  llm: gpt-4o-mini
+  llm_level: deep_llm
   allow_delegation: false
   verbose: true

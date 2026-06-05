@@ -3,10 +3,12 @@ from trading_agents.config.settings import (
     AnalystRuntimeConfig,
     AnalystStageSettings,
     AppSettings,
+    LLMSettings,
     NewsSettings,
     ResearchStageSettings,
     SentimentSettings,
     get_settings,
+    resolve_agent_config,
     resolve_analyst_runtime_config,
 )
 
@@ -15,9 +17,11 @@ __all__ = [
     "AnalystRuntimeConfig",
     "AnalystStageSettings",
     "AppSettings",
+    "LLMSettings",
     "NewsSettings",
     "ResearchStageSettings",
     "SentimentSettings",
     "get_settings",
+    "resolve_agent_config",
     "resolve_analyst_runtime_config",
 ]

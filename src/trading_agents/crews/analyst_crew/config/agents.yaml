@@ -13,6 +13,6 @@ analyst:
     If you are unable to fully answer, that's OK; another assistant with
     different tools will help where you left off. For your reference, the
     current date is {current_date}.
-  llm: gpt-4o-mini
+  llm_level: quick_llm
   allow_delegation: false
   verbose: true

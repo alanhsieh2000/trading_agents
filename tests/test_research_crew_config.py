@@ -28,7 +28,9 @@ def test_research_agents_keep_runtime_settings():
 
     for agent_key in AGENT_KEYS:
         agent_config = agents[agent_key]
-        assert agent_config["llm"] == "gpt-4o-mini"
+        expected_level = "deep_llm" if agent_key == "research_manager" else "quick_llm"
+        assert agent_config["llm_level"] == expected_level
+        assert "llm" not in agent_config
         assert agent_config["allow_delegation"] is False
         assert agent_config["verbose"] is True
 
@@ -76,6 +78,17 @@ def test_research_tasks_bind_expected_agents_and_manager_output():
     assert bear_task.agent.role == crew_source.bear_researcher().role
     assert manager_task.agent.role == crew_source.research_manager().role
     assert manager_task.output_pydantic is InvestmentPlan
+
+
+def test_research_agents_resolve_configured_llm_levels(monkeypatch):
+    monkeypatch.setenv("TRADING_AGENTS_LLM__QUICK_LLM", "gpt-4o-mini")
+    monkeypatch.setenv("TRADING_AGENTS_LLM__DEEP_LLM", "gpt-4o")
+    research_module.get_settings.cache_clear()
+    crew_source = ResearchCrew()
+
+    assert crew_source.bull_researcher().llm.model == "gpt-4o-mini"
+    assert crew_source.bear_researcher().llm.model == "gpt-4o-mini"
+    assert crew_source.research_manager().llm.model == "gpt-4o"
 
 
 def test_research_crew_enables_tracing_and_runs_tasks_sequentially():
