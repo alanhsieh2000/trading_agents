@@ -1,0 +1,26 @@
+trader_decision:
+  name: trader_decision
+  description: |
+    Based on a comprehensive analysis by a team of analysts, here is an investment plan tailored for {ticker}.
+
+    This plan incorporates insights from current technical market trends, macroeconomic indicators, and social media sentiment. Use this plan as a foundation for evaluating your next trading decision.
+
+    Proposed Investment Plan: {investment_plan}
+
+    Leverage these insights to make an informed and strategic decision.
+  expected_output: |
+    Return a TraderProposal object with:
+    - action: exactly one of Buy, Hold, Sell
+    - reasoning: two to four sentences anchored in the analysts' reports and the research plan
+    - entry_price: optional entry price target in the instrument's quote currency
+    - stop_loss: optional stop-loss price in the instrument's quote currency
+    - position_sizing: optional sizing guidance such as "5% of portfolio"
+
+    **Trader Action** (use exactly one):
+    - **Buy**: Strong conviction in the bull thesis; recommend taking or growing the position
+    - **Hold**: Balanced view; recommend maintaining the current position
+    - **Sell**: Strong conviction in the bear thesis; recommend exiting or avoiding the position
+
+    Turn the investment plan into a concrete transaction: what action to take, the reasoning that justifies it, and the practical levels for entry, stop-loss, and sizing.
+  agent: trader_agent
+  markdown: true

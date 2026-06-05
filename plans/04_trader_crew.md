@@ -17,12 +17,13 @@ This plan is intentionally limited to one crew. The goal is to finish coding, pr
 - [x] (2026-05-26 00:00Z) Split the former combined decision-stage plan so Trader work can proceed independently after Research Crew completion.
 - [x] (2026-06-05 00:00Z) Reconciled this plan with `PROMPTS.md`: the trader stage is now one agent, one task, and a `TraderProposal` structured output.
 - [x] (2026-06-05 00:00Z) Aligned this plan with the plan 03 implementation pattern: settings-backed LLM resolution, no direct model strings in YAML, and flow wiring in `main.py`.
-- [ ] Confirm `plans/03_research_crew.md` has produced a stable `investment_plan` output.
-- [ ] Extend shared schemas with the trader-stage contract.
-- [ ] Implement `trader_crew` with one `trader_decision` task.
-- [ ] Add mocked config and contract tests for the trader stage.
-- [ ] Run focused tests and one small smoke helper, then record the results here.
-- [ ] Preserve the runtime conventions established in plan 02 and plan 03: `load_dotenv()` before live runs, `llm_level` in YAML resolved by `resolve_agent_config()`, runtime tunables in `config/settings.py`, `tracing=True` on the crew, and flow integration through `TradingAgentsFlow`.
+- [x] (2026-06-05 00:00Z) Confirmed `plans/03_research_crew.md` has produced a stable `investment_plan` output.
+- [x] (2026-06-05 00:00Z) Extended shared schemas with the trader-stage contract.
+- [x] (2026-06-05 00:00Z) Implemented `trader_crew` with one `trader_decision` task.
+- [x] (2026-06-05 00:00Z) Added mocked config and contract tests for the trader stage.
+- [x] (2026-06-05 00:00Z) Wired the trader stage into `TradingAgentsFlow` and output persistence.
+- [x] (2026-06-05 00:00Z) Ran focused tests and the full test suite, then recorded the results here.
+- [x] (2026-06-05 00:00Z) Preserved the runtime conventions established in plan 02 and plan 03: `load_dotenv()` before live runs, `llm_level` in YAML resolved by `resolve_agent_config()`, runtime tunables in `config/settings.py`, `tracing=True` on the crew, and flow integration through `TradingAgentsFlow`.
 
 ## Surprises & Discoveries
 
@@ -32,6 +33,10 @@ This plan is intentionally limited to one crew. The goal is to finish coding, pr
   Evidence: The prompt text says the investment plan incorporates current technical market trends, macroeconomic indicators, and social media sentiment, then asks the trader to use that plan as the foundation for the next trading decision.
 - Observation: Plan 03 moved model selection behind `config/settings.py`.
   Evidence: Implemented agents use `llm_level` in YAML and crew classes pass `resolve_agent_config(self.agents_config[...])` to `Agent(...)`, so this plan must not reintroduce literal `llm` model settings in agent YAML.
+- Observation: The installed CrewAI version is one patch behind PyPI, but the APIs used by this plan are already present in the installed version.
+  Evidence: `uv run python -c "import crewai; print(crewai.__version__)"` printed `1.14.5`; PyPI reported `1.14.6`; the live CrewAI docs for agents, tasks, crews, and flows still show the same Agent, Task, Crew, Flow, and structured output concepts used by the existing code.
+- Observation: The research stage helper required by this plan is available.
+  Evidence: `uv run python -c "from trading_agents.crews.research_crew.research_crew import run_research_stage; print(run_research_stage.__name__)"` printed `run_research_stage`.
 
 ## Decision Log
 
@@ -53,7 +58,17 @@ This plan is intentionally limited to one crew. The goal is to finish coding, pr
 
 ## Outcomes & Retrospective
 
-This plan is not implemented yet. The expected outcome is a single runnable trader-stage helper that accepts a ticker plus a research-stage investment plan and returns a stable `trader_plan` represented by `TraderProposal`. The stage should also be wired into `TradingAgentsFlow` and persisted with the rest of the run outputs. Update this section after implementation and validation.
+This plan is implemented. The repository now has a single runnable trader-stage helper that accepts a ticker plus a research-stage investment plan and returns a stable `trader_plan` represented by `TraderProposal`. The stage is wired into `TradingAgentsFlow`, saved into flow state, and persisted as `trader_plan.md` beside the analyst and research artifacts.
+
+Validation completed from `/app/trading_agents`:
+
+    uv run pytest tests/test_trader_crew_config.py tests/test_trader_stage_contracts.py tests/test_trading_flow.py
+    15 passed
+
+    uv run pytest
+    65 passed
+
+The test run produced CrewAI deprecation warnings from the installed dependency, including `function_calling_llm is deprecated`, but no test failures.
 
 ## Context and Orientation
 
@@ -161,3 +176,5 @@ Add one contract test that proves the parsed object preserves action, reasoning,
 All work in this plan is additive. The trader helper can be rerun safely with the same mock inputs. If structured output proves unreliable, keep the prompts and tests stable while adding a narrow fallback parser rather than changing the downstream contract.
 
 Revision Note: 2026-05-26 split the former combined plan 03 into a dedicated Trader Crew plan so the decision-stage work can proceed one crew at a time.
+
+Revision Note: 2026-06-05 implemented the Trader Crew, flow integration, persistence, and focused tests so plan 04 now reflects the completed behavior and validation evidence.

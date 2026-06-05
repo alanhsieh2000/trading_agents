@@ -19,6 +19,7 @@ from crewai.flow import Flow, listen, start  # noqa: E402
 
 from trading_agents.crews.analyst_crew.analyst_crew import run_analyst_stage  # noqa: E402
 from trading_agents.crews.research_crew.research_crew import run_research_stage  # noqa: E402
+from trading_agents.crews.trader_crew.trader_crew import run_trader_stage  # noqa: E402
 
 DEFAULT_TICKER = "NVDA"
 DEFAULT_TRADE_DATE = datetime.now(UTC).strftime("%Y-%m-%d")
@@ -32,6 +33,9 @@ RESEARCH_OUTPUT_FILES = {
     "debate_history": "debate_history.md",
     "investment_plan": "investment_plan.md",
 }
+TRADER_OUTPUT_FILES = {
+    "trader_plan": "trader_plan.md",
+}
 
 
 class TradingAgentsState(BaseModel):
@@ -43,6 +47,7 @@ class TradingAgentsState(BaseModel):
     market_report: str = ""
     debate_history: str = ""
     investment_plan: dict[str, Any] = Field(default_factory=dict)
+    trader_plan: dict[str, Any] = Field(default_factory=dict)
     output_dir: str = ""
 
 
@@ -99,7 +104,25 @@ class TradingAgentsFlow(Flow[TradingAgentsState]):
         return research_outputs
 
     @listen(run_research)
-    def save_outputs(self, _research_outputs: dict[str, Any]) -> dict[str, Any]:
+    def run_trader(self, research_outputs: dict[str, Any]) -> dict[str, Any]:
+        print(f"Running trader stage for {self.state.ticker} on {self.state.trade_date}")
+        trader_inputs: dict[str, Any] = {
+            "ticker": self.state.ticker,
+            "trade_date": self.state.trade_date,
+            "investment_plan": research_outputs["investment_plan"],
+        }
+        trader_outputs = run_trader_stage(trader_inputs)
+        trader_plan = trader_outputs["trader_plan"]
+        if hasattr(trader_plan, "model_dump"):
+            self.state.trader_plan = trader_plan.model_dump()
+        else:
+            self.state.trader_plan = dict(trader_plan)
+
+        print("Trader stage complete")
+        return trader_outputs
+
+    @listen(run_trader)
+    def save_outputs(self, _trader_outputs: dict[str, Any]) -> dict[str, Any]:
         output_dir = save_outputs(self.state)
         print(f"TradingAgents outputs saved to {output_dir}")
         return self.state.model_dump()
@@ -173,6 +196,10 @@ def save_outputs(state: TradingAgentsState) -> Path:
         _format_investment_plan(state.investment_plan),
         encoding="utf-8",
     )
+    (output_dir / TRADER_OUTPUT_FILES["trader_plan"]).write_text(
+        _format_trader_plan(state.trader_plan),
+        encoding="utf-8",
+    )
 
     return output_dir
 
@@ -198,6 +225,20 @@ def _format_investment_plan(investment_plan: dict[str, Any]) -> str:
         ("Recommendation", investment_plan.get("recommendation", "")),
         ("Rationale", investment_plan.get("rationale", "")),
         ("Strategic Actions", investment_plan.get("strategic_actions", "")),
+    ]
+    return "\n\n".join(f"## {title}\n{value}".rstrip() for title, value in sections) + "\n"
+
+
+def _format_trader_plan(trader_plan: dict[str, Any]) -> str:
+    if not trader_plan:
+        return ""
+
+    sections = [
+        ("Action", trader_plan.get("action", "")),
+        ("Reasoning", trader_plan.get("reasoning", "")),
+        ("Entry Price", trader_plan.get("entry_price", "")),
+        ("Stop Loss", trader_plan.get("stop_loss", "")),
+        ("Position Sizing", trader_plan.get("position_sizing", "")),
     ]
     return "\n\n".join(f"## {title}\n{value}".rstrip() for title, value in sections) + "\n"
 
