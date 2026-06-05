@@ -256,25 +256,45 @@ The outputs of this crew are:
 ### 2. Research Crew
 
 This crew consists of three agents and three tasks:
-- Bull Researcher for Bul Research
+- Bull Researcher for Bull Research
 - Bear Researcher for Bear Research
 - Research Manager for Research Management
 
-The three agents do their tasks in sequence for several iterations until both researchers have no further responses or the count reaches the maximum:
+The research stage runs a fixed number of debate rounds. The default is one
+round, configured by `research_stage.max_rounds` in runtime settings and
+overridable with `TRADING_AGENTS_RESEARCH_STAGE__MAX_ROUNDS`.
+
+For each round, the stage executes:
 - bull research
 - bear research
-- research management, skipped if both researcher have no further responses
+- research management
+
+The research manager runs after every completed round and the final manager
+output becomes the stage investment plan. There is no `HAS_MORE` stop signal;
+the debate ends when the configured round count is reached.
 
 The input to this crew is:
+- ticker
+- trade date
 - fundamentals report
 - sentiment report
 - news report
 - market report
 
 The outputs of this crew are:
+- debate history
 - investment plan
 
-For each discussion iteration, the current discussion history is added to the input. That is to say, within any discussion iteration, the previous agent's output is added to the discussion history and provided as input for the next agent's task.
+The investment plan is structured with:
+- recommendation
+- rationale
+- strategic actions
+
+For each discussion iteration, the current discussion history and the previous
+researcher's response are added to the input. The flow prefixes researcher turns
+as `Bull Analyst:` and `Bear Analyst:` before appending them to the debate
+history. The main flow saves the research outputs to the run output directory as
+`debate_history.md` and `investment_plan.md`, alongside the four analyst reports.
 
 ### 3. Trader Crew
 
