@@ -333,13 +333,13 @@ fundamentals_analysis:
 
 ## 2. Research Team
 
-There three agents in the research team, a bull researcher, a bear researcher, and a research manager. The research process is:
+There are three agents in the research team, a bull researcher, a bear researcher, and a research manager. The research process is:
 - After reading four reports from the analyst team plus {current_response} and {history}, the bull researcher provide a response.
 - The bullish response after prefixed "Bull Analyst: " becomes {current_response} and is appended to {history}.
 - After reading four reports from the analyst team plus {current_response} and {history}, the bear researcher provide a response.
 - The bearish response after prefixed "Bear Analyst: " becomes {current_response} and is appended to {history}.
-- After reading the {history}, the research manager provide an investment plan which is a pydantic object.
 - If the round counter reaches the maximum, the iteration ends. Otherwise, iterates again.
+- If the iteration ends, after reading the {history}, the research manager provide an investment plan which is a pydantic object.
 
 The research process starts with an empty {history} and an empty {current_resonse}, "" for either one.
 
