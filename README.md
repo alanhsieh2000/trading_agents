@@ -264,14 +264,16 @@ The research stage runs a fixed number of debate rounds. The default is one
 round, configured by `research_stage.max_rounds` in runtime settings and
 overridable with `TRADING_AGENTS_RESEARCH_STAGE__MAX_ROUNDS`.
 
-For each round, the stage executes:
+For each debate round, the stage executes:
 - bull research
 - bear research
-- research management
 
-The research manager runs after every completed round and the final manager
-output becomes the stage investment plan. There is no `HAS_MORE` stop signal;
-the debate ends when the configured round count is reached.
+After all configured debate rounds are complete, the stage executes research
+management once. The research manager receives the ticker and the final debate
+history, but not the original analyst reports or the latest `current_response`,
+and that single manager output becomes the stage investment plan. There is no
+`HAS_MORE` stop signal; the debate ends when the configured round count is
+reached.
 
 The input to this crew is:
 - ticker
@@ -291,10 +293,11 @@ The investment plan is structured with:
 - strategic actions
 
 For each discussion iteration, the current discussion history and the previous
-researcher's response are added to the input. The flow prefixes researcher turns
-as `Bull Analyst:` and `Bear Analyst:` before appending them to the debate
-history. The main flow saves the research outputs to the run output directory as
-`debate_history.md` and `investment_plan.md`, alongside the four analyst reports.
+researcher's response are added to the bull or bear research input. The flow
+prefixes researcher turns as `Bull Analyst:` and `Bear Analyst:` before
+appending them to the debate history. The main flow saves the research outputs
+to the run output directory as `debate_history.md` and `investment_plan.md`,
+alongside the four analyst reports.
 
 ### 3. Trader Crew
 

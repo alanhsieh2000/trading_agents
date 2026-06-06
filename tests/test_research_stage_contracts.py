@@ -71,9 +71,15 @@ def test_run_research_stage_accumulates_history_in_order(monkeypatch):
     assert calls[0][1]["fundamentals_label"] == "Company fundamentals report"
     assert calls[1][1]["current_response"].startswith("Bull Analyst: ")
     assert "Bull round 1" in calls[1][1]["history"]
-    assert calls[2][1]["current_response"].startswith("Bear Analyst: ")
+    assert set(calls[2][1]) == {"ticker", "history"}
+    assert calls[2][1]["ticker"] == "NVDA"
     assert "Bull round 1" in calls[2][1]["history"]
     assert "Bear round 1" in calls[2][1]["history"]
+    assert "current_response" not in calls[2][1]
+    assert "market_report" not in calls[2][1]
+    assert "sentiment_report" not in calls[2][1]
+    assert "news_report" not in calls[2][1]
+    assert "fundamentals_report" not in calls[2][1]
     assert result["debate_history"].index("Bull round 1") < result["debate_history"].index(
         "Bear round 1"
     )
@@ -98,8 +104,6 @@ def test_run_research_stage_runs_exactly_max_rounds(monkeypatch):
             _task_result("Bear round 3"),
         ],
         "research_management": [
-            _manager_result("Hold", "Round one thesis"),
-            _manager_result("Overweight", "Round two thesis"),
             _manager_result("Buy", "Round three thesis"),
         ],
     }
@@ -115,16 +119,16 @@ def test_run_research_stage_runs_exactly_max_rounds(monkeypatch):
     assert [task_name for task_name, _ in calls] == [
         "bull_research",
         "bear_research",
-        "research_management",
         "bull_research",
         "bear_research",
-        "research_management",
         "bull_research",
         "bear_research",
         "research_management",
     ]
-    assert calls[3][1]["current_response"].startswith("Bear Analyst: ")
-    assert "Bear round 1" in calls[3][1]["history"]
+    assert calls[2][1]["current_response"].startswith("Bear Analyst: ")
+    assert "Bear round 1" in calls[2][1]["history"]
+    assert set(calls[-1][1]) == {"ticker", "history"}
+    assert calls[-1][1]["ticker"] == "NVDA"
     assert result["debate_history"].index("Bull round 1") < result["debate_history"].index(
         "Bear round 1"
     )
@@ -140,6 +144,15 @@ def test_run_research_stage_runs_exactly_max_rounds(monkeypatch):
     assert result["debate_history"].index("Bull round 3") < result["debate_history"].index(
         "Bear round 3"
     )
+    for expected_turn in (
+        "Bull round 1",
+        "Bear round 1",
+        "Bull round 2",
+        "Bear round 2",
+        "Bull round 3",
+        "Bear round 3",
+    ):
+        assert expected_turn in calls[-1][1]["history"]
     assert result["investment_plan"]["recommendation"] == "Buy"
     assert result["investment_plan"]["rationale"] == "Round three thesis"
 
@@ -158,7 +171,6 @@ def test_run_research_stage_uses_settings_max_rounds_by_default(monkeypatch):
             _task_result("Bear round 2"),
         ],
         "research_management": [
-            _manager_result("Hold", "Round one thesis"),
             _manager_result("Buy", "Round two thesis"),
         ],
     }
@@ -174,11 +186,14 @@ def test_run_research_stage_uses_settings_max_rounds_by_default(monkeypatch):
     assert [task_name for task_name, _ in calls] == [
         "bull_research",
         "bear_research",
-        "research_management",
         "bull_research",
         "bear_research",
         "research_management",
     ]
+    assert set(calls[-1][1]) == {"ticker", "history"}
+    assert calls[-1][1]["ticker"] == "NVDA"
+    assert "Bull round 2" in calls[-1][1]["history"]
+    assert "Bear round 2" in calls[-1][1]["history"]
     assert result["investment_plan"]["rationale"] == "Round two thesis"
     get_settings.cache_clear()
 

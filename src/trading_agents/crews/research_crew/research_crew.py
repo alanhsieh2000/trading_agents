@@ -108,8 +108,6 @@ def run_research_stage(
 
     prepared_inputs = _prepare_research_inputs(inputs)
     debate_entries: list[str] = []
-    investment_plan: dict[str, Any] | None = None
-
     for _ in range(max_rounds):
         history = _format_debate_history(debate_entries)
         current_response = debate_entries[-1] if debate_entries else ""
@@ -136,23 +134,18 @@ def run_research_stage(
         )
         debate_entries.append(_format_turn("Bear Analyst", bear_result.raw))
 
-        history = _format_debate_history(debate_entries)
-        current_response = debate_entries[-1]
-        manager_result = _kickoff_research_task(
-            "research_management",
-            {
-                **prepared_inputs,
-                "history": history,
-                "current_response": current_response,
-            },
-        )
-        investment_plan = _serialize_investment_plan(manager_result)
-
-    if investment_plan is None:
-        raise ValueError("Research stage did not produce an investment plan.")
+    history = _format_debate_history(debate_entries)
+    manager_result = _kickoff_research_task(
+        "research_management",
+        {
+            "ticker": prepared_inputs["ticker"],
+            "history": history,
+        },
+    )
+    investment_plan = _serialize_investment_plan(manager_result)
 
     return {
-        "debate_history": _format_debate_history(debate_entries),
+        "debate_history": history,
         "investment_plan": investment_plan,
     }
 

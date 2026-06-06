@@ -61,6 +61,23 @@ def test_research_prompts_use_prompt_source_placeholders():
     assert "{debate_history}" not in tasks_yaml
 
 
+def test_research_manager_config_only_requires_ticker_and_history_inputs():
+    agents = _load_yaml("agents.yaml")
+    manager_config_text = "\n".join(
+        str(value) for value in agents["research_manager"].values()
+    )
+    manager_task_text = str(_load_yaml("tasks.yaml")["research_management"])
+
+    assert "{ticker}" in manager_config_text
+    assert "{current_response}" not in manager_task_text
+    assert "{market_report}" not in manager_task_text
+    assert "{sentiment_report}" not in manager_task_text
+    assert "{news_report}" not in manager_task_text
+    assert "{fundamentals_report}" not in manager_task_text
+    assert "{ticker}" not in manager_task_text
+    assert "{history}" in manager_task_text
+
+
 def test_research_tasks_bind_expected_agents_and_manager_output():
     crew_source = ResearchCrew()
 
