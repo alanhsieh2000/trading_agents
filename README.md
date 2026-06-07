@@ -327,14 +327,14 @@ The `trader_decision` task should use `output_pydantic=TraderProposal`.
 ### 4. Risk Management Crew
 
 This crew consists of three agents and three tasks:
-- Aggressive Risk Debator for Aggressive Risk Opinions
-- Aggressive Risk Debator for Conservative Risk Opinions
-- Neutral Risk Debator for Neutral Risk Opinions
+- Aggressive Risk Analyst for Aggressive Risk Opinions
+- Conservative Risk Analyst for Conservative Risk Opinions
+- Neutral Risk Analyst for Neutral Risk Opinions
 
-The three agents do their tasks in sequence for several iterations until all debators have no further responses or the count reaches the maximum:
-- Aggressive Risk Opinions, skipped if the other two debators have no further respones in the previous iteration
+The three agents do their tasks in sequence for several iterations until all analysts have no further responses or the count reaches the maximum:
+- Aggressive Risk Opinions, skipped if the other two analysts have no further respones in the previous iteration
 - Conservative Risk Opinions, skipped if aggressive risk debator has no further response in the current iteration and neutral risk debator has no further respone in the previous iteration
-- Neutral Risk Opinions, skipped if the other two debators have no further responses in the current iteration
+- Neutral Risk Opinions, skipped if the other two analysts have no further responses in the current iteration
 
 The input to this crew is:
 - fundamentals report
