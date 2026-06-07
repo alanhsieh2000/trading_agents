@@ -849,8 +849,8 @@ neutral_analyst:
 The description and expected output becomes:
 
 ```within tasks.yaml
-conservative_risk_analysis:
-  name: conservative_risk_analysis
+neutral_risk_analysis:
+  name: neutral_risk_analysis
   description: |
     Your task is to challenge both the Aggressive and Conservative Analysts, pointing out where each perspective may be overly optimistic or overly cautious. Use insights from the following data sources to support a moderate, sustainable strategy to adjust the trader's decision.
 
