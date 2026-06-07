@@ -127,8 +127,9 @@ Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/ag
 ### 5. Portfolio Manager
 
 The Portfolio Manager makes the final decision. This agent should not simply
-repeat the Trader Agent's proposal. It should approve, reject, or modify the
-trade based on the full chain of analysis and risk review.
+repeat the Trader Agent's proposal. It synthesizes the risk analysts' debate and
+delivers a final position rating (Buy / Overweight / Hold / Underweight / Sell)
+grounded in the full chain of analysis and risk review.
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/managers/portfolio_manager.py"
 
@@ -356,18 +357,33 @@ For each debate iteration, the current debate history is added to the input. Tha
 
 ### 5. Portfolio Crew
 
-This crew consists of one agent and three tasks:
-- Portfolio Manager for initial trade decision
-- Portfolio Manager for self-reflection on the initial trade decision
-- Portfolio Manager for final trade decision
+This crew consists of one Portfolio Manager agent and one task:
+- Portfolio Manager for `final_decision`
+
+Making the Portfolio Manager a crew, rather than a single agent with a single
+task, leaves room to add a self-reflection step on the initial decision in the
+future. That self-reflection step is not implemented yet.
 
 The input to this crew is:
+- ticker
 - investment plan
 - trader plan
 - risk debate history, including all risk debate opinions in sequence
 
 The outputs of this crew are:
-- final trade decision, which is exactly a single word, either "approve" or "reject"
+- final trade decision, structured as `PortfolioDecision`
+
+The final trade decision is structured as `PortfolioDecision` with:
+- rating: exactly one of `Buy`, `Overweight`, `Hold`, `Underweight`, or `Sell`
+  (the `PortfolioRating` scale shared with the Research Manager)
+- executive_summary: a concise action plan covering entry strategy, position
+  sizing, key risk levels, and time horizon (two to four sentences)
+- investment_thesis: detailed reasoning anchored in specific evidence from the
+  analysts' debate
+- price_target: optional target price in the instrument's quote currency
+- time_horizon: optional recommended holding period, e.g. `3-6 months`
+
+The `final_decision` task should use `output_pydantic=PortfolioDecision`.
 
 ## Flow
 
@@ -378,9 +394,8 @@ The flow consists of five crews in sequence:
 - Risk Management Crew
 - Portfolio Crew
 
-The output of the flow is:
-- "Hold", if the final trade decision of the Portfolio Crew is "reject"
-- trader plan, the output of the Trader Crew, if the final trade decision of the Portfolio Crew is "approve"
+The output of the flow is the Portfolio Crew's final trade decision: a
+`PortfolioDecision` carrying the final position rating and its supporting thesis.
 
 # Installation
 
