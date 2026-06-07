@@ -871,3 +871,112 @@ neutral_risk_analysis:
     Engage actively by analyzing both sides critically, addressing weaknesses in the aggressive and conservative arguments to advocate for a more balanced approach. Challenge each of their points to illustrate why a moderate risk strategy might offer the best of both worlds, providing growth potential while safeguarding against extreme volatility. Focus on debating rather than simply presenting data, aiming to show that a balanced view can lead to the most reliable outcomes. Output conversationally as if you are speaking without any special formatting.
   agent: neutral_analyst
 ```
+
+## 5. Portfolio Manager
+
+The portfolio manager crew has one agent and one task.
+
+The pydantic type for the portfolio manager's final decision is:
+
+```PortfolioDecision
+class PortfolioDecision(BaseModel):
+    """Structured output produced by the Portfolio Manager."""
+
+    rating: PortfolioRating = Field(
+        description=(
+            "The final position rating. Exactly one of Buy / Overweight / Hold / "
+            "Underweight / Sell, picked based on the analysts' debate."
+        ),
+    )
+    executive_summary: str = Field(
+        description=(
+            "A concise action plan covering entry strategy, position sizing, "
+            "key risk levels, and time horizon. Two to four sentences."
+        ),
+    )
+    investment_thesis: str = Field(
+        description=(
+            "Detailed reasoning anchored in specific evidence from the analysts' "
+            "debate. If prior lessons are referenced in the prompt context, "
+            "incorporate them; otherwise rely solely on the current analysis."
+        ),
+    )
+    price_target: Optional[float] = Field(
+        default=None,
+        description="Optional target price in the instrument's quote currency.",
+    )
+    time_horizon: Optional[str] = Field(
+        default=None,
+        description="Optional recommended holding period, e.g. '3-6 months'.",
+    )
+```
+
+The pydantic type PortfolioRating referenced is the same as the one introduced in the "2. Research Team" section.
+
+We choose to make the Portfolio Manager a crew rather than a single agent with a single task. That will give us the flexibility to add self-reflection in the future. The output of the portfolio manager crew is the final decision, which is well structured, we need to use output_pydantic=PortfolioDecision for the Task instance.
+
+The original implementation use this system prompt:
+
+```The original system prompt
+As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
+
+The instrument to analyze is {ticker}. Use this exact ticker in every tool call, report, and recommendation, preserving any exchange suffix (e.g. `.TO`, `.L`, `.HK`, `.T`, `-USD`).
+
+---
+
+**Rating Scale** (use exactly one):
+- **Buy**: Strong conviction to enter or add to position
+- **Overweight**: Favorable outlook, gradually increase exposure
+- **Hold**: Maintain current position, no action needed
+- **Underweight**: Reduce exposure, take partial profits
+- **Sell**: Exit position or avoid entry
+
+**Context:**
+- Research Manager's investment plan: **{investment_plan}**
+- Trader's transaction proposal: **{trader_plan}**
+- {lessons_line}
+- Risk Analysts Debate History: **{history}**
+
+---
+
+Be decisive and ground every conclusion in specific evidence from the analysts.
+```
+
+The role, goal, and backstory becomes:
+```within agents.yaml
+portfolio_manager:
+  role: >
+    a portfolio manager.
+  goal: >
+    As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
+  backstory: >
+    {lessons_line}
+```
+
+The description and expected output becomes:
+
+```within tasks.yaml
+final_decision:
+  name: final_decision
+  description: |
+    The instrument to analyze is {ticker}. Use this exact ticker in every tool call, report, and recommendation, preserving any exchange suffix (e.g. `.TO`, `.L`, `.HK`, `.T`, `-USD`).
+
+    Based on the following context: 
+
+    **Context:**
+    - Research Manager's investment plan: **{investment_plan}**
+    - Trader's transaction proposal: **{trader_plan}**
+    - Risk Analysts Debate History: **{history}**
+
+    Leverage these insights to make an informed and strategic decision.
+  expected_output: |
+    **Rating Scale** (use exactly one):
+    - **Buy**: Strong conviction to enter or add to position
+    - **Overweight**: Favorable outlook, gradually increase exposure
+    - **Hold**: Maintain current position, no action needed
+    - **Underweight**: Reduce exposure, take partial profits
+    - **Sell**: Exit position or avoid entry
+
+    Be decisive and ground every conclusion in specific evidence from the analysts.
+  agent: portfolio_manager
+```
