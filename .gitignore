@@ -7,3 +7,5 @@ lib/
 skills-lock.json
 output/
 .codex
+pre-claude.sh
+pre-codex.sh
