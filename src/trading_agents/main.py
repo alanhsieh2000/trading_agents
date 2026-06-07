@@ -19,6 +19,9 @@ from crewai.flow import Flow, listen, start  # noqa: E402
 
 from trading_agents.crews.analyst_crew.analyst_crew import run_analyst_stage  # noqa: E402
 from trading_agents.crews.research_crew.research_crew import run_research_stage  # noqa: E402
+from trading_agents.crews.risk_management_crew.risk_management_crew import (  # noqa: E402
+    run_risk_stage,
+)
 from trading_agents.crews.trader_crew.trader_crew import run_trader_stage  # noqa: E402
 
 DEFAULT_TICKER = "NVDA"
@@ -36,6 +39,9 @@ RESEARCH_OUTPUT_FILES = {
 TRADER_OUTPUT_FILES = {
     "trader_plan": "trader_plan.md",
 }
+RISK_OUTPUT_FILES = {
+    "risk_debate_history": "risk_debate_history.md",
+}
 
 
 class TradingAgentsState(BaseModel):
@@ -48,6 +54,7 @@ class TradingAgentsState(BaseModel):
     debate_history: str = ""
     investment_plan: dict[str, Any] = Field(default_factory=dict)
     trader_plan: dict[str, Any] = Field(default_factory=dict)
+    risk_debate_history: str = ""
     output_dir: str = ""
 
 
@@ -122,7 +129,26 @@ class TradingAgentsFlow(Flow[TradingAgentsState]):
         return trader_outputs
 
     @listen(run_trader)
-    def save_outputs(self, _trader_outputs: dict[str, Any]) -> dict[str, Any]:
+    def run_risk_management(self, trader_outputs: dict[str, Any]) -> dict[str, str]:
+        print(f"Running risk stage for {self.state.ticker} on {self.state.trade_date}")
+        trader_plan = trader_outputs["trader_plan"]
+        risk_inputs: dict[str, Any] = {
+            "ticker": self.state.ticker,
+            "trade_date": self.state.trade_date,
+            "fundamentals_report": self.state.fundamentals_report,
+            "sentiment_report": self.state.sentiment_report,
+            "news_report": self.state.news_report,
+            "market_report": self.state.market_report,
+            "trader_plan": trader_plan,
+        }
+        risk_outputs = run_risk_stage(risk_inputs)
+        self.state.risk_debate_history = str(risk_outputs["risk_debate_history"])
+
+        print("Risk stage complete")
+        return risk_outputs
+
+    @listen(run_risk_management)
+    def save_outputs(self, _risk_outputs: dict[str, Any]) -> dict[str, Any]:
         output_dir = save_outputs(self.state)
         print(f"TradingAgents outputs saved to {output_dir}")
         return self.state.model_dump()
@@ -198,6 +224,10 @@ def save_outputs(state: TradingAgentsState) -> Path:
     )
     (output_dir / TRADER_OUTPUT_FILES["trader_plan"]).write_text(
         _format_trader_plan(state.trader_plan),
+        encoding="utf-8",
+    )
+    (output_dir / RISK_OUTPUT_FILES["risk_debate_history"]).write_text(
+        state.risk_debate_history,
         encoding="utf-8",
     )
 

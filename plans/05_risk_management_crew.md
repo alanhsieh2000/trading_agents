@@ -16,12 +16,14 @@ This plan is intentionally limited to one crew. The goal is to finish coding, pr
 - [x] (2026-05-23 14:20Z) Reviewed upstream risk-stage source summaries and the earlier combined decision-stage plan notes.
 - [x] (2026-05-26 00:00Z) Split the former combined decision-stage plan so risk work can proceed independently after Trader Crew completion.
 - [x] (2026-06-05 00:00Z) Aligned this plan with the plan 03 implementation pattern: settings-backed LLM resolution, settings-backed stage tuning, and flow wiring in `main.py`.
-- [ ] Confirm `plans/04_trader_crew.md` has produced a stable `trader_plan` output.
-- [ ] Extend shared schemas with the risk-stage contract.
-- [ ] Implement `risk_management_crew` with iterative debate-history handling.
-- [ ] Add mocked config and contract tests for the risk stage.
-- [ ] Run focused tests and one small smoke helper, then record the results here.
-- [ ] Preserve the runtime conventions established in earlier plans: `load_dotenv()` before live runs, `llm_level` in YAML resolved by `resolve_agent_config()`, runtime tunables in `config/settings.py`, `tracing=True` on the crew, and flow integration through `TradingAgentsFlow`.
+- [x] (2026-06-07 06:16Z) Confirmed `plans/04_trader_crew.md` has produced a stable `trader_plan` output by importing `run_trader_stage`.
+- [x] (2026-06-07 06:16Z) Confirmed the risk stage uses the plain transcript contract and does not need a `RiskOpinion` schema.
+- [x] (2026-06-07 06:16Z) Implemented `risk_management_crew` with iterative aggressive, conservative, and neutral debate-history handling.
+- [x] (2026-06-07 06:16Z) Added mocked config and contract tests for the risk stage.
+- [x] (2026-06-07 06:16Z) Ran focused risk and flow tests, then the full test suite.
+- [x] (2026-06-07 06:16Z) Preserved the runtime conventions established in earlier plans: `load_dotenv()` before live runs, `llm_level` in YAML resolved by `resolve_agent_config()`, runtime tunables in `config/settings.py`, `tracing=True` on the crew, and flow integration through `TradingAgentsFlow`.
+- [x] (2026-06-07 07:49Z) Removed the obsolete `HAS_MORE` stop contract; `max_rounds`, defaulting to 1, is now the only risk-stage iteration stop.
+- [x] (2026-06-07 07:49Z) Renamed the risk YAML and crew methods to align with `PROMPTS.md`: `aggressive_analyst`, `conservative_analyst`, `neutral_analyst`, and `*_risk_analysis` task names.
 
 ## Surprises & Discoveries
 
@@ -31,20 +33,24 @@ This plan is intentionally limited to one crew. The goal is to finish coding, pr
   Evidence: Bull-versus-bear stop logic from research is not sufficient here because the risk transcript must preserve aggressive, conservative, and neutral turns in exact order.
 - Observation: Plan 03 moved stage-loop tuning into runtime settings.
   Evidence: Research max rounds are resolved from `get_settings().research_stage.max_rounds` when the caller does not provide an override; risk debate max rounds should follow the same pattern instead of hard-coding a default at call sites.
+- Observation: Individual risk opinions are kept as free text instead of CrewAI `output_pydantic` task outputs.
+  Evidence: The implemented prompts require conversational debate text, and `tests/test_risk_stage_contracts.py` verifies ordered transcript assembly without structured opinion parsing.
+- Observation: The `PROMPTS.md` neutral YAML example repeats the key `conservative_risk_analysis`.
+  Evidence: YAML cannot contain two distinct task entries with the same key for a three-task CrewAI crew, so the implementation uses `neutral_risk_analysis` for the neutral task while preserving the prompt wording.
 
 ## Decision Log
 
-- Decision: Correct the README typo locally by implementing a `conservative_risk_debator`.
+- Decision: Correct the README typo locally by implementing a `conservative_analyst`.
   Rationale: The role name, task title, and described behavior all point to a distinct conservative agent; reusing the aggressive agent name would create a misleading interface.
   Date/Author: 2026-05-26 / Codex
-- Decision: Add `RiskOpinion` to `src/trading_agents/schemas.py` in this plan.
-  Rationale: The risk debate introduces a new structured unit that later plans should consume directly instead of inventing ad hoc strings.
-  Date/Author: 2026-05-26 / Codex
-- Decision: Use the same explicit `HAS_MORE: yes` or `HAS_MORE: no` trailer pattern as the research debate.
-  Rationale: Deterministic parsing and testability matter more than trying to infer conversational completeness from raw prose.
-  Date/Author: 2026-05-26 / Codex
-- Decision: Configure all three risk debators with `llm_level: quick_llm`.
-  Rationale: Only the portfolio manager uses `deep_llm`; aggressive, conservative, and neutral risk debators are non-portfolio agents and should use the settings-backed quick model.
+- Decision: Do not add `RiskOpinion` to `src/trading_agents/schemas.py`.
+  Rationale: The risk-stage output consumed by later stages is the full ordered debate transcript, not individual structured risk opinions.
+  Date/Author: 2026-06-07 / Codex
+- Decision: Do not use `HAS_MORE` or any opinion-level stop signal in the risk stage.
+  Rationale: `PROMPTS.md` specifies that the risk debate iterates until the round counter reaches the maximum. The configured `max_rounds` is therefore the only stop condition.
+  Date/Author: 2026-06-07 / Codex
+- Decision: Configure all three risk analysts with `llm_level: quick_llm`.
+  Rationale: Only the portfolio manager uses `deep_llm`; aggressive, conservative, and neutral risk analysts are non-portfolio agents and should use the settings-backed quick model.
   Date/Author: 2026-06-05 / Codex
 - Decision: Add `RiskStageSettings.max_rounds` to `src/trading_agents/config/settings.py`.
   Rationale: Debate length is a runtime tuning knob and should use the same environment-overridable settings surface as research-stage max rounds.
@@ -52,10 +58,26 @@ This plan is intentionally limited to one crew. The goal is to finish coding, pr
 - Decision: Wire the risk stage into `TradingAgentsFlow` as part of this plan.
   Rationale: Plan 03 established that newly completed stages should be part of the main flow and saved as inspectable run artifacts.
   Date/Author: 2026-06-05 / Codex
+- Decision: Preserve each raw debate turn in `risk_debate_history`.
+  Rationale: Keeping the full generated text makes the transcript auditable; loop control comes only from `max_rounds`.
+  Date/Author: 2026-06-07 / Codex
 
 ## Outcomes & Retrospective
 
-This plan is not implemented yet. The expected outcome is a single runnable risk-stage helper that accepts analyst reports plus a trader plan and returns a stable `risk_debate_history`. The stage should also be wired into `TradingAgentsFlow` and persisted with the rest of the run outputs. Update this section after implementation and validation.
+Implemented the Risk Management Crew and wired it into `TradingAgentsFlow`. The project now has a runnable `run_risk_stage(inputs, max_rounds=None)` helper that validates analyst reports plus the trader plan, runs aggressive, conservative, and neutral turns in order for exactly the configured number of rounds, and returns a stable `risk_debate_history` transcript. The default risk debate length is one round through `RiskStageSettings(max_rounds=1)`. The main flow persists the transcript as `risk_debate_history.md` beside the analyst, research, and trader artifacts.
+
+Validation completed on 2026-06-07:
+
+    uv run pytest tests/test_risk_management_crew_config.py tests/test_risk_stage_contracts.py tests/test_runtime_settings.py tests/test_trading_flow.py
+    25 passed
+
+    uv run pytest tests/test_risk_management_crew_config.py tests/test_risk_stage_contracts.py tests/test_trading_flow.py
+    16 passed
+
+    uv run pytest
+    77 passed
+
+No smoke helper was added because the mocked contract tests exercise the risk-stage helper and the flow persistence path without requiring live LLM credentials.
 
 ## Context and Orientation
 
@@ -67,39 +89,34 @@ Create a new directory:
 
 That directory should contain `risk_management_crew.py` and a `config/` folder with `agents.yaml` and `tasks.yaml`, matching the repository pattern used by other crews.
 
-In this repository, the risk debate history is a plain text transcript assembled in exact execution order. The neutral debator does not erase the aggressive and conservative views; it balances them and highlights missing caution or missing upside.
+In this repository, the risk debate history is a plain text transcript assembled in exact execution order. The neutral analyst does not erase the aggressive and conservative views; it balances them and highlights missing caution or missing upside.
 
 ## Plan of Work
 
-First, extend `src/trading_agents/schemas.py` with:
+First, keep the risk-stage output contract as plain text. No `RiskOpinion` schema is required because later stages consume the complete `risk_debate_history` transcript.
 
-    class RiskOpinion(BaseModel):
-        speaker: Literal["Aggressive", "Conservative", "Neutral"]
-        response: str
-        has_more: bool = True
+Second, extend `src/trading_agents/config/settings.py` with `RiskStageSettings(max_rounds=1)` and add it to `AppSettings` and `trading_agents.config.__all__`. Any future risk-stage tuning constants should be added to settings rather than hard-coded in the helper or flow.
 
-Second, extend `src/trading_agents/config/settings.py` with `RiskStageSettings(max_rounds=2)` and add it to `AppSettings` and `trading_agents.config.__all__`. Any future risk-stage tuning constants should be added to settings rather than hard-coded in the helper or flow.
+Third, implement `src/trading_agents/crews/risk_management_crew/risk_management_crew.py`. Import and call `load_dotenv()` near the top of the module. Import `get_settings` and `resolve_agent_config` from `trading_agents.config`; pass `config=resolve_agent_config(self.agents_config[...])` when constructing each agent. Define `RiskManagementCrew` with three agents named `aggressive_analyst`, `conservative_analyst`, and `neutral_analyst`, and three tasks named `aggressive_risk_analysis`, `conservative_risk_analysis`, and `neutral_risk_analysis`. Keep the crew sequential and traced.
 
-Third, implement `src/trading_agents/crews/risk_management_crew/risk_management_crew.py`. Import and call `load_dotenv()` near the top of the module. Import `get_settings` and `resolve_agent_config` from `trading_agents.config`; pass `config=resolve_agent_config(self.agents_config[...])` when constructing each agent. Define `RiskManagementCrew` with three agents named `aggressive_risk_debator`, `conservative_risk_debator`, and `neutral_risk_debator`, and three tasks named `aggressive_risk_opinion`, `conservative_risk_opinion`, and `neutral_risk_opinion`. Keep the crew sequential and traced.
-
-Fourth, implement `run_risk_stage(inputs, max_rounds=None)`. When `max_rounds` is `None`, resolve it from `get_settings().risk_stage.max_rounds`. The helper should validate the presence of the four analyst reports and the `trader_plan`, initialize an empty `risk_debate_history`, and run aggressive, conservative, and neutral turns in that order. After each response, append it to the transcript. Stop early only when all active participants signal `HAS_MORE: no` for the current round. Return at least:
+Fourth, implement `run_risk_stage(inputs, max_rounds=None)`. When `max_rounds` is `None`, resolve it from `get_settings().risk_stage.max_rounds`. The helper should validate the presence of the four analyst reports and the `trader_plan`, initialize an empty `risk_debate_history`, and run aggressive, conservative, and neutral turns in that order. After each response, append it to the transcript. Stop only when the configured round count is reached. Return at least:
 
     {
         "risk_debate_history": "...",
     }
 
-If structured parsing works for individual opinions, keep it. If not, parse only the `HAS_MORE` trailer and preserve the transcript as plain text.
+Do not parse individual risk opinions or look for a `HAS_MORE` trailer. Preserve the transcript as plain text.
 
 Fifth, wire the risk stage into `src/trading_agents/main.py`. Import `run_risk_stage`, add `risk_debate_history` to `TradingAgentsState`, add a `@listen` method after the trader stage that passes the four analyst reports, `ticker`, `trade_date`, and `trader_plan` into `run_risk_stage`, and persist the risk debate history with the other run outputs.
 
-Sixth, write the prompts in `src/trading_agents/crews/risk_management_crew/config/agents.yaml` and `src/trading_agents/crews/risk_management_crew/config/tasks.yaml`. The aggressive role should emphasize upside and challenge excessive caution. The conservative role should emphasize capital preservation and downside protection. The neutral role should weigh both and point out overconfidence or overreaction. Every risk agent YAML entry must use `llm_level: quick_llm`, `allow_delegation: false`, and `verbose: true`; do not set literal `llm` values. Every opinion task should end with the explicit `HAS_MORE` trailer.
+Sixth, write the prompts in `src/trading_agents/crews/risk_management_crew/config/agents.yaml` and `src/trading_agents/crews/risk_management_crew/config/tasks.yaml`. Follow the `PROMPTS.md` Risk Management Team section: aggressive analysis should emphasize upside and challenge excessive caution, conservative analysis should emphasize capital preservation and downside protection, and neutral analysis should weigh both perspectives and point out overconfidence or overreaction. Every risk agent YAML entry must use `llm_level: quick_llm`, `allow_delegation: false`, and `verbose: true`; do not set literal `llm` values. Opinion tasks should output conversational text without special formatting and should not include `HAS_MORE`.
 
 Seventh, add focused tests. Create:
 
     tests/test_risk_management_crew_config.py
     tests/test_risk_stage_contracts.py
 
-The config test should verify method names, YAML keys, task-to-agent bindings, `llm_level: quick_llm` for all risk agents, and absence of literal `llm` in the agent YAML. The contract test should mock the risk-stage outputs to prove that `run_risk_stage` validates required inputs, preserves transcript order, resolves `max_rounds` from settings by default, and stops according to the explicit trailer rule. Add a flow test that mocks `run_risk_stage` and proves `TradingAgentsFlow` passes through and persists the risk debate history.
+The config test should verify method names, YAML keys, task-to-agent bindings, `llm_level: quick_llm` for all risk agents, absence of literal `llm` in the agent YAML, and absence of `HAS_MORE` in task prompts. The contract test should mock the risk-stage outputs to prove that `run_risk_stage` validates required inputs, preserves transcript order, resolves `max_rounds` from settings by default, and runs exactly the configured number of rounds. Add a flow test that mocks `run_risk_stage` and proves `TradingAgentsFlow` passes through and persists the risk debate history.
 
 Eighth, add a small smoke entry point only if needed, for example `src/trading_agents/dev_smoke_risk_stage.py`, that feeds local sample reports and a sample trader plan into `run_risk_stage` and prints the resulting keys.
 
@@ -149,13 +166,15 @@ Acceptance requires all of the following behaviors:
 - `run_risk_stage` rejects missing analyst reports or missing `trader_plan` with a clear error before any live LLM work starts.
 - The risk stage returns an ordered `risk_debate_history` transcript containing aggressive, conservative, and neutral turns in execution order.
 - `TradingAgentsFlow` runs the risk stage after trader, stores `risk_debate_history` in state, and saves the risk output beside earlier stage artifacts.
-- The stage stop condition is deterministic and covered by tests.
+- The stage stop condition is deterministic, based only on `max_rounds`, and covered by tests.
 - Mocked tests pass without network or live LLM calls.
-
-If individual opinions are structured, add one contract test that proves `speaker` and `has_more` survive parsing correctly. If opinions are kept as free text, document that contract here and in the test file.
 
 ## Idempotence and Recovery
 
-All work in this plan is additive. The risk helper can be rerun safely with the same mock inputs. If one role's prompt causes unstable `HAS_MORE` output, tighten that single prompt and parser without changing the downstream transcript contract.
+All work in this plan is additive. The risk helper can be rerun safely with the same mock inputs. If one role's prompt is unstable, tighten that single prompt without changing the downstream transcript contract.
 
 Revision Note: 2026-05-26 split the former combined plan 03 into a dedicated Risk Management Crew plan so the decision-stage work can proceed one crew at a time.
+
+Revision Note: 2026-06-07 implemented the Risk Management Crew, recorded the plain-text transcript contract, and added validation evidence from the focused and full test suites.
+
+Revision Note: 2026-06-07 removed the obsolete `HAS_MORE` stop condition, changed the risk default to one round, aligned the YAML names with `PROMPTS.md`, and documented that `max_rounds` is the only iteration stop.

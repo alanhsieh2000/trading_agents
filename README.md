@@ -331,10 +331,16 @@ This crew consists of three agents and three tasks:
 - Conservative Risk Analyst for Conservative Risk Opinions
 - Neutral Risk Analyst for Neutral Risk Opinions
 
-The three agents do their tasks in sequence for several iterations until all analysts have no further responses or the count reaches the maximum:
-- Aggressive Risk Opinions, skipped if the other two analysts have no further respones in the previous iteration
-- Conservative Risk Opinions, skipped if aggressive risk debator has no further response in the current iteration and neutral risk debator has no further respone in the previous iteration
-- Neutral Risk Opinions, skipped if the other two analysts have no further responses in the current iteration
+The risk stage runs a fixed number of debate rounds. The default is one round,
+configured by `risk_stage.max_rounds` in runtime settings and overridable with
+`TRADING_AGENTS_RISK_STAGE__MAX_ROUNDS`. There is no `HAS_MORE` stop signal and
+no per-agent skip rule; the debate ends only when the configured round count is
+reached.
+
+For each debate round, the stage executes:
+- Aggressive Risk Opinions
+- Conservative Risk Opinions
+- Neutral Risk Opinions
 
 The input to this crew is:
 - fundamentals report

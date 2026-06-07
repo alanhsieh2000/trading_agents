@@ -35,6 +35,10 @@ class ResearchStageSettings(BaseModel):
     max_rounds: int = Field(default=1, ge=1)
 
 
+class RiskStageSettings(BaseModel):
+    max_rounds: int = Field(default=1, ge=1)
+
+
 class LLMSettings(BaseModel):
     quick_llm: str = Field(default="gpt-4o-mini", min_length=1)
     deep_llm: str = Field(default="gpt-4o-mini", min_length=1)
@@ -51,6 +55,7 @@ class AppSettings(BaseSettings):
     sentiment: SentimentSettings = SentimentSettings()
     analyst_stage: AnalystStageSettings = AnalystStageSettings()
     research_stage: ResearchStageSettings = ResearchStageSettings()
+    risk_stage: RiskStageSettings = RiskStageSettings()
     llm: LLMSettings = LLMSettings()
 
 

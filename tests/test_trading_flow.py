@@ -29,12 +29,20 @@ TRADER_OUTPUTS = {
         "position_sizing": "5% of portfolio",
     },
 }
+RISK_OUTPUTS = {
+    "risk_debate_history": (
+        "Aggressive Analyst: upside case\n\n"
+        "Conservative Analyst: downside case\n\n"
+        "Neutral Analyst: balanced case"
+    ),
+}
 
 
 def test_trading_agents_flow_runs_analyst_stage_with_trigger(monkeypatch, tmp_path):
     captured_inputs = {}
     captured_research_inputs = {}
     captured_trader_inputs = {}
+    captured_risk_inputs = {}
 
     def fake_run_analyst_stage(inputs):
         captured_inputs.update(inputs)
@@ -48,9 +56,14 @@ def test_trading_agents_flow_runs_analyst_stage_with_trigger(monkeypatch, tmp_pa
         captured_trader_inputs.update(inputs)
         return dict(TRADER_OUTPUTS)
 
+    def fake_run_risk_stage(inputs):
+        captured_risk_inputs.update(inputs)
+        return dict(RISK_OUTPUTS)
+
     monkeypatch.setattr(main_module, "run_analyst_stage", fake_run_analyst_stage)
     monkeypatch.setattr(main_module, "run_research_stage", fake_run_research_stage)
     monkeypatch.setattr(main_module, "run_trader_stage", fake_run_trader_stage)
+    monkeypatch.setattr(main_module, "run_risk_stage", fake_run_risk_stage)
     monkeypatch.chdir(tmp_path)
 
     flow = main_module.TradingAgentsFlow(tracing=True)
@@ -80,9 +93,16 @@ def test_trading_agents_flow_runs_analyst_stage_with_trigger(monkeypatch, tmp_pa
         "trade_date": "2024-05-24",
         "investment_plan": RESEARCH_OUTPUTS["investment_plan"],
     }
+    assert captured_risk_inputs == {
+        "ticker": "NVDA",
+        "trade_date": "2024-05-24",
+        **REPORTS,
+        "trader_plan": TRADER_OUTPUTS["trader_plan"],
+    }
     assert result["ticker"] == "NVDA"
     assert result["investment_plan"] == RESEARCH_OUTPUTS["investment_plan"]
     assert result["trader_plan"] == TRADER_OUTPUTS["trader_plan"]
+    assert result["risk_debate_history"] == RISK_OUTPUTS["risk_debate_history"]
     assert result["output_dir"] == "output/NVDA_2024-05-24"
 
     output_dir = Path("output/NVDA_2024-05-24")
@@ -103,6 +123,9 @@ def test_trading_agents_flow_runs_analyst_stage_with_trigger(monkeypatch, tmp_pa
         "## Stop Loss\n94.0\n\n"
         "## Position Sizing\n5% of portfolio\n"
     )
+    assert (output_dir / "risk_debate_history.md").read_text() == (
+        RISK_OUTPUTS["risk_debate_history"]
+    )
 
 
 def test_kickoff_uses_default_trading_inputs(monkeypatch, tmp_path):
@@ -118,9 +141,13 @@ def test_kickoff_uses_default_trading_inputs(monkeypatch, tmp_path):
     def fake_run_trader_stage(_inputs):
         return dict(TRADER_OUTPUTS)
 
+    def fake_run_risk_stage(_inputs):
+        return dict(RISK_OUTPUTS)
+
     monkeypatch.setattr(main_module, "run_analyst_stage", fake_run_analyst_stage)
     monkeypatch.setattr(main_module, "run_research_stage", fake_run_research_stage)
     monkeypatch.setattr(main_module, "run_trader_stage", fake_run_trader_stage)
+    monkeypatch.setattr(main_module, "run_risk_stage", fake_run_risk_stage)
     monkeypatch.chdir(tmp_path)
 
     result = main_module.kickoff()
@@ -187,9 +214,13 @@ def test_invalid_trade_date_stops_before_analyst_stage(monkeypatch):
     def fake_run_trader_stage(_inputs):
         raise AssertionError("trader stage should not run when inputs are invalid")
 
+    def fake_run_risk_stage(_inputs):
+        raise AssertionError("risk stage should not run when inputs are invalid")
+
     monkeypatch.setattr(main_module, "run_analyst_stage", fake_run_analyst_stage)
     monkeypatch.setattr(main_module, "run_research_stage", fake_run_research_stage)
     monkeypatch.setattr(main_module, "run_trader_stage", fake_run_trader_stage)
+    monkeypatch.setattr(main_module, "run_risk_stage", fake_run_risk_stage)
 
     flow = main_module.TradingAgentsFlow(tracing=True)
     with pytest.raises(ValueError, match="YYYY-MM-DD"):
