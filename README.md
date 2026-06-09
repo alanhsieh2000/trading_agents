@@ -131,6 +131,10 @@ repeat the Trader Agent's proposal. It synthesizes the risk analysts' debate and
 delivers a final position rating (Buy / Overweight / Hold / Underweight / Sell)
 grounded in the full chain of analysis and risk review.
 
+The Portfolio Manager also plays a second role as a self-reflection analyst: it
+reviews its own past decisions once the outcomes are known and records concise
+lessons that inform future decisions on the same instrument.
+
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/managers/portfolio_manager.py"
 
 ## Tasks
@@ -219,6 +223,14 @@ The output of this task is conservative response.
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/risk_mgmt/neutral_debator.py"
 
 The output of this task is neutral response.
+
+### 5. Portfolio Manager - Self Reflection
+
+Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/managers/portfolio_manager.py"
+
+The output of this task is a short self-reflection (2-4 sentences) on a past
+decision, written back into the corresponding lesson record. The self-reflection
+runs once per just-updated lesson record before the final decision.
 
 ### 5. Portfolio Manager - Final Decision
 
@@ -357,12 +369,42 @@ For each debate iteration, the current debate history is added to the input. Tha
 
 ### 5. Portfolio Crew
 
-This crew consists of one Portfolio Manager agent and one task:
-- Portfolio Manager for `final_decision`
+This crew consists of two agents and two tasks, even though it represents a
+one-person team. The Portfolio Manager plays two roles:
+- Portfolio Manager for `final_decision`, who makes the final decision
+- Portfolio Manager for `self_reflection`, who reflects on past decisions to
+  make better decisions in the future
 
-Making the Portfolio Manager a crew, rather than a single agent with a single
-task, leaves room to add a self-reflection step on the initial decision in the
-future. That self-reflection step is not implemented yet.
+Each time the Portfolio Manager makes a decision, the relevant information is
+stored alongside the decision as a lesson record. The next time the Portfolio
+Manager decides on the same instrument, the stage:
+- updates the lesson records of that instrument with real returns (raw return,
+  alpha return versus the benchmark, and holding days),
+- self-reflects on each just-updated lesson record, one by one, and writes the
+  reflection back into the record,
+- retrieves up to `max_lessons` lesson records (default 30) as past lessons,
+  which form `{lessons_line}`. When there is no prior lesson record,
+  `{lessons_line}` becomes "You have not invested this instrument in the past
+  yet.", and
+- makes the final decision using the investment plan, trader plan, risk debate
+  history, and `{lessons_line}`.
+
+A lesson record contains the ticker, the trade date, the final decision, the raw
+return (formatted as `+.1%`), the alpha return (formatted as `+.1%`), the holding
+days, and the reflection.
+
+The benchmark used for the alpha return is resolved from the ticker's exchange
+suffix (for example `.HK` -> `^HSI`, `.L` -> `^FTSE`, and no suffix -> `SPY`).
+Holding days is capped at `max_holding_days` (default 5): it is the smaller of
+the ticker's and the benchmark's available transaction days since the trade date,
+or `max_holding_days` when both already exceed it. The end date is the trade date
+advanced by the holding days in transaction days; the raw return is the
+close-to-close return of the ticker between the trade date and the end date, and
+the alpha return is that raw return minus the benchmark's close-to-close return
+over the same window.
+
+The self-reflection step uses the quick LLM, while the final decision uses the
+deep LLM.
 
 The input to this crew is:
 - ticker
@@ -372,6 +414,7 @@ The input to this crew is:
 
 The outputs of this crew are:
 - final trade decision, structured as `PortfolioDecision`
+- updated lesson records, carrying the real returns and reflections
 
 The final trade decision is structured as `PortfolioDecision` with:
 - rating: exactly one of `Buy`, `Overweight`, `Hold`, `Underweight`, or `Sell`
@@ -383,7 +426,9 @@ The final trade decision is structured as `PortfolioDecision` with:
 - price_target: optional target price in the instrument's quote currency
 - time_horizon: optional recommended holding period, e.g. `3-6 months`
 
-The `final_decision` task should use `output_pydantic=PortfolioDecision`.
+The `final_decision` task should use `output_pydantic=PortfolioDecision`. The
+lesson record and the list of retrieved lessons are backed by their own Pydantic
+types defined in the implementation.
 
 ## Flow
 
