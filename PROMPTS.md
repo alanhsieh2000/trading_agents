@@ -874,7 +874,49 @@ neutral_risk_analysis:
 
 ## 5. Portfolio Manager
 
-The portfolio manager crew has one agent and one task.
+The portfolio manager crew has two agents to do two tasks although it is a one-man team. The portfolio manager plays two roles:
+- the portfolio manager who makes the final decision,
+- the portfolio manager who self-reflects on past decisions for making better decisions in the future
+
+Every time the portfolio manager makes a decision, relative information is stored along with the decision made as a lesson record. Next time when the portfolio manager needs to make another decision on the same stock/etf, lesson records of the same target will be updated with real returns, and max_lessons records will be retrieved as past lessons. The portfolio manager then reflects on past lessons to get {lessons_line} before making the final decision. The process is:
+- Update lesson records with real returns, including raw return, alpha return for the benchmark, and holding days.
+- The portfolio manager self-reflects on just-updated lesson records to get reflections of each records one by one.
+- Update lesson records with corresponding reflections.
+- Retrieve max_lessons lesson records as past lessons, where max_lessons is a constant with default value 30. {lessons_line} are these retrieved lesson records if there is at least one lesson record. Otherwise, {lessons_line} will be "You have not invested this instrument in the past yet."
+- The portfolio manager makes the final decision using {investment_plan} from the Research Team, {trader_plan} from the Trader Agent, {history} from the Risk Management Team, and {lessons_line}.
+
+The benchmark {benchmark_name} for the {ticker} is resolved by the suffix of the {ticker} by using the following benchmark map:
+```PortfolioDecision
+"benchmark_map": {
+    ".NS":  "^NSEI",       # NSE India (Nifty 50)
+    ".BO":  "^BSESN",      # BSE India (Sensex)
+    ".T":   "^N225",       # Tokyo (Nikkei 225)
+    ".HK":  "^HSI",        # Hong Kong (Hang Seng)
+    ".L":   "^FTSE",       # London (FTSE 100)
+    ".TO":  "^GSPTSE",     # Toronto (TSX Composite)
+    ".AX":  "^AXJO",       # Australia (ASX 200)
+    ".SS":  "000001.SS",   # Shanghai (SSE Composite)
+    ".SZ":  "399001.SZ",   # Shenzhen (SZSE Component)
+    "":     "SPY",         # default for US-listed tickers (no suffix)
+    },
+```
+
+A lesson record contains the following infomation:
+- the {ticker}
+- the trade date
+- the final decision, {final_decision}
+- raw return in f"+.1%" format, {raw_return}
+- alpha return in f"+.1%" format, {alpha_return}
+- holding days
+- reflection
+
+Holding days is a variable with the maximum value max_holding_days. If either the {ticker} or the benchmark already has more transaction days than max_holding_days since the trade date of a lesson record, holding days of that record will be updated with max_holding_days. Otherwise, it will be updated with the smallest transaction days. The default value of max_holding_days is 5. For instance, let's say the trade date of a lesson record is 2026/06/04, and the latest transaction date with a CLOSE price for the {ticker} is 2026/06/05 and 2026/06/08 for the benchmark. Therefore, the transaction days for the {ticker} is 1. Because 2026/06/06 - 2026/06/07 are weekends, no transactions during the time, the transaction days for the benchmark is 2. In this case, holding days will be 1.
+
+Now, we can define the end date of the {ticker} and the benchmark: the transaction days between the trade date and the end date equals to holding days. By using the end date, we define the raw return and the alpha return as:
+- (the CLOSE price of the end date for the {ticker} - the CLOSE price of the trade date for the {ticker}) /  (the CLOSE price of the trade date for the {ticker})
+- (the CLOSE price of the end date for the benchmark - the CLOSE price of the trade date for the benchmark) /  (the CLOSE price of the trade date for the benchmark). If there is no CLOSE price for the benchmark on the trade date, use the latest previous and available date instead.
+
+Although we don't define the pydantic types here for the lesson record and the lesson records list {lessons_line}, the implementation should use all the information in this section to define needed pydantic types.
 
 The pydantic type for the portfolio manager's final decision is:
 
@@ -913,9 +955,59 @@ class PortfolioDecision(BaseModel):
 
 The pydantic type PortfolioRating referenced is the same as the one introduced in the "2. Research Team" section.
 
-We choose to make the Portfolio Manager a crew rather than a single agent with a single task. That will give us the flexibility to add self-reflection in the future. The output of the portfolio manager crew is the final decision, which is well structured, we need to use output_pydantic=PortfolioDecision for the Task instance.
+The output of the portfolio manager crew is the final decision, which is well structured, we need to use output_pydantic=PortfolioDecision for the Task instance.
 
-The original implementation use this system prompt:
+The original implementation for self-reflection uses this system prompt:
+
+```The original system prompt
+You are a trading analyst reviewing your own past decision now that the outcome is known.
+Write exactly 2-4 sentences of plain prose (no bullets, no headers, no markdown).
+
+Cover in order:
+1. Was the directional call correct? (cite the alpha figure)
+2. Which part of the investment thesis held or failed?
+3. One concrete lesson to apply to the next similar analysis.
+
+Be specific and terse. Your output will be stored verbatim in a decision log and re-read by future analysts, so every word must earn its place.
+```
+
+```The original user prompt
+f"Raw return: {raw_return:+.1%}\n"
+f"Alpha vs {benchmark_name}: {alpha_return:+.1%}\n\n"
+f"Final Decision:\n{final_decision}"
+```
+
+The role, goal, and backstory becomes:
+```within agents.yaml
+self_reflection_manager:
+  role: >
+    a portfolio manager.
+  goal: >
+    You are a trading analyst reviewing your own past decision now that the outcome is known.
+  backstory: >
+    Write exactly 2-4 sentences of plain prose (no bullets, no headers, no markdown).
+```
+
+The description and expected output becomes:
+
+```within tasks.yaml
+self_reflection:
+  name: self_reflection
+  description: |
+    Raw return: {raw_return}
+    Alpha vs {benchmark_name}: {alpha_return}
+    Final Decision: {final_decision}
+  expected_output: |
+    Cover in order:
+    1. Was the directional call correct? (cite the alpha figure)
+    2. Which part of the investment thesis held or failed?
+    3. One concrete lesson to apply to the next similar analysis.
+
+    Be specific and terse. Your output will be stored verbatim in a decision log and re-read by future analysts, so every word must earn its place.
+  agent: self_reflection_manager
+```
+
+The original implementation for making the final decision uses this system prompt:
 
 ```The original system prompt
 As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
@@ -949,7 +1041,8 @@ portfolio_manager:
     a portfolio manager.
   goal: >
     As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
-  backstory: >
+  backstory: |
+    Lessons from prior decisions and outcomes:
     {lessons_line}
 ```
 
