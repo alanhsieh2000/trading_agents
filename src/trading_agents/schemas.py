@@ -45,6 +45,74 @@ class InvestmentPlan(BaseModel):
     )
 
 
+class PortfolioDecision(BaseModel):
+    """Structured output produced by the Portfolio Manager."""
+
+    rating: PortfolioRating = Field(
+        description=(
+            "The final position rating. Exactly one of Buy / Overweight / Hold / "
+            "Underweight / Sell, picked based on the analysts' debate."
+        ),
+    )
+    executive_summary: str = Field(
+        description=(
+            "A concise action plan covering entry strategy, position sizing, "
+            "key risk levels, and time horizon. Two to four sentences."
+        ),
+    )
+    investment_thesis: str = Field(
+        description=(
+            "Detailed reasoning anchored in specific evidence from the analysts' "
+            "debate. If prior lessons are referenced in the prompt context, "
+            "incorporate them; otherwise rely solely on the current analysis."
+        ),
+    )
+    price_target: Optional[float] = Field(
+        default=None,
+        description="Optional target price in the instrument's quote currency.",
+    )
+    time_horizon: Optional[str] = Field(
+        default=None,
+        description="Optional recommended holding period, e.g. '3-6 months'.",
+    )
+
+
+class LessonRecord(BaseModel):
+    """One stored row about a single past decision for one instrument.
+
+    The reflection and the realized returns are filled in later, once the
+    outcome of the decision is known.
+    """
+
+    ticker: str = Field(description="The instrument the decision was made for.")
+    trade_date: str = Field(description="The date the decision was made (YYYY-MM-DD).")
+    final_decision: str = Field(
+        description="The final position rating recorded at the trade date.",
+    )
+    raw_return: Optional[float] = Field(
+        default=None,
+        description="Realized close-to-close return of the instrument over the holding window.",
+    )
+    alpha_return: Optional[float] = Field(
+        default=None,
+        description="raw_return minus the benchmark's return over the same window.",
+    )
+    holding_days: Optional[int] = Field(
+        default=None,
+        description="Transaction days between the trade date and the end date, capped.",
+    )
+    reflection: Optional[str] = Field(
+        default=None,
+        description="Plain-prose lesson written once the outcome is known.",
+    )
+
+
+class LessonBook(BaseModel):
+    """Persistent collection of lesson records for a single instrument."""
+
+    lessons: list[LessonRecord] = Field(default_factory=list)
+
+
 class TraderAction(str, Enum):
     """3-tier transaction direction used by the Trader."""
 

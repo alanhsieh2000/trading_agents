@@ -44,6 +44,28 @@ class LLMSettings(BaseModel):
     deep_llm: str = Field(default="gpt-4o-mini", min_length=1)
 
 
+# Maps a ticker's exchange suffix to the benchmark index used as its yardstick.
+# The empty suffix is the default for US-listed tickers (no suffix).
+BENCHMARK_MAP: dict[str, str] = {
+    ".NS": "^NSEI",       # NSE India (Nifty 50)
+    ".BO": "^BSESN",      # BSE India (Sensex)
+    ".T": "^N225",        # Tokyo (Nikkei 225)
+    ".HK": "^HSI",        # Hong Kong (Hang Seng)
+    ".L": "^FTSE",        # London (FTSE 100)
+    ".TO": "^GSPTSE",     # Toronto (TSX Composite)
+    ".AX": "^AXJO",       # Australia (ASX 200)
+    ".SS": "000001.SS",   # Shanghai (SSE Composite)
+    ".SZ": "399001.SZ",   # Shenzhen (SZSE Component)
+    "": "SPY",            # default for US-listed tickers (no suffix)
+}
+
+
+class PortfolioStageSettings(BaseModel):
+    max_lessons: int = Field(default=30, ge=0)
+    max_holding_days: int = Field(default=5, ge=1)
+    benchmark_map: dict[str, str] = Field(default_factory=lambda: dict(BENCHMARK_MAP))
+
+
 class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="TRADING_AGENTS_",
@@ -56,6 +78,7 @@ class AppSettings(BaseSettings):
     analyst_stage: AnalystStageSettings = AnalystStageSettings()
     research_stage: ResearchStageSettings = ResearchStageSettings()
     risk_stage: RiskStageSettings = RiskStageSettings()
+    portfolio_stage: PortfolioStageSettings = PortfolioStageSettings()
     llm: LLMSettings = LLMSettings()
 
 

@@ -21,13 +21,13 @@ This plan is intentionally limited to one crew. The goal is to finish coding, pr
 - [x] (2026-05-26 00:00Z) Split the former combined decision-stage plan so portfolio work can proceed independently after Risk Management Crew completion.
 - [x] (2026-06-05 00:00Z) Aligned this plan with the plan 03 implementation pattern: settings-backed LLM resolution, no literal model strings in YAML, and flow wiring in `main.py`.
 - [x] (2026-06-09 00:00Z) Realigned this plan with the finalized `PROMPTS.md` "5. Portfolio Manager" specification: two agents (`portfolio_manager` and `self_reflection_manager`) running two tasks (`self_reflection` then `final_decision`), the lesson-record / self-reflection store, the rich `PortfolioDecision` rating contract, and the rule that the deep model is used only for the final decision.
-- [ ] Confirm `plans/05_risk_management_crew.md` has produced a stable `risk_debate_history` output.
-- [ ] Extend shared schemas with the rich `PortfolioDecision` contract and the lesson-record Pydantic types (`LessonRecord` and the retrieved-lessons list behind `{lessons_line}`).
-- [ ] Implement the lesson store: persist a lesson record per decision, resolve the benchmark from the ticker suffix, compute realized returns (raw return, alpha return) and holding days from price data, and build `{lessons_line}`.
-- [ ] Implement `portfolio_crew` with two agents (`portfolio_manager`, `self_reflection_manager`) and two sequential tasks (`self_reflection`, `final_decision`).
-- [ ] Add mocked config and contract tests for the portfolio stage.
-- [ ] Run focused tests and one small smoke helper, then record the results here.
-- [ ] Preserve the runtime conventions established in earlier plans: `load_dotenv()` before live runs, `llm_level` in YAML resolved by `resolve_agent_config()`, runtime tunables in `config/settings.py`, `tracing=True` on the crew, and flow integration through `TradingAgentsFlow`.
+- [x] (2026-06-09) Confirmed `plans/05_risk_management_crew.md` produced a stable `risk_debate_history` output (`run_risk_stage` importable and returning the keyed transcript).
+- [x] (2026-06-09) Extended shared schemas with the rich `PortfolioDecision` contract and the lesson-record Pydantic types (`LessonRecord`, `LessonBook`).
+- [x] (2026-06-09) Implemented the lesson store (`crews/portfolio_crew/lesson_store.py`): persists a lesson record per decision keyed by ticker+trade-date, resolves the benchmark from the ticker suffix, computes realized returns (raw, benchmark, alpha) and capped holding days from price series, and renders `{lessons_line}`.
+- [x] (2026-06-09) Implemented `portfolio_crew` with two agents (`portfolio_manager`, `self_reflection_manager`) and two sequential tasks (`self_reflection`, `final_decision`); `final_decision` uses `output_pydantic=PortfolioDecision`.
+- [x] (2026-06-09) Added mocked config and contract tests for the portfolio stage and updated the flow test to mock `run_portfolio_stage`.
+- [x] (2026-06-09) Ran focused tests and the full suite (96 passed). No smoke helper was added: no other stage ships one, and the contract tests cover the stage offline.
+- [x] (2026-06-09) Preserved the runtime conventions: `load_dotenv()` at module import, `llm_level` in YAML resolved by `resolve_agent_config()`, tunables (`max_lessons`, `max_holding_days`, `benchmark_map`) in `config/settings.py`, `tracing=True` on the crew, and flow integration through `TradingAgentsFlow`.
 
 ## Surprises & Discoveries
 
@@ -77,7 +77,14 @@ This plan is intentionally limited to one crew. The goal is to finish coding, pr
 
 ## Outcomes & Retrospective
 
-This plan is not implemented yet. The expected outcome is a single runnable portfolio-stage helper that accepts the ticker, the research plan, the trader plan, and the risk debate, that updates and self-reflects on prior lesson records for that ticker, that retrieves up to `max_lessons` lessons as `{lessons_line}`, and that returns a structured `PortfolioDecision`. The stage should also persist a fresh lesson record for the current decision, be wired into `TradingAgentsFlow`, and be saved with the rest of the run outputs. Update this section after implementation and validation.
+Implemented on 2026-06-09. `run_portfolio_stage(inputs)` validates `ticker`, `investment_plan`, `trader_plan`, and `risk_debate_history` before any LLM work; updates prior lesson records for the ticker with realized returns and capped holding days; self-reflects on each updated record via the `self_reflection_manager` (quick model); retrieves up to `max_lessons` records as `{lessons_line}` (falling back to "You have not invested this instrument in the past yet." when empty); makes the final decision via the `portfolio_manager` (deep model) returning a structured `PortfolioDecision`; and persists a fresh lesson record for the current decision. The stage is wired into `TradingAgentsFlow` after the risk stage and saved as `final_trade_decision.md` alongside the JSON lesson store under `output/lessons/<TICKER>.json`.
+
+Key implementation notes:
+- Holding days reduces to `min(instrument_transaction_days, benchmark_transaction_days, max_holding_days)`, which is equivalent to the plan's "cap when both exceed, else smaller of the two" rule and matches the PROMPTS.md worked example (holding days = 1).
+- `alpha_return = raw_return - benchmark_return`; the benchmark falls back to the latest available previous close when it has no close on the trade date.
+- The malformed-rating normalizer `normalize_rating` maps trivial variants to the canonical `PortfolioRating`: exact values with optional trailing period or case differences (`"Buy."`, `"BUY"`) and strings containing exactly one rating keyword (`"BUY because the thesis is strong"` -> `Buy`) are normalized; strings with two or more distinct rating keywords (`"Buy or Sell"`) or none (`"Maybe later"`) raise a `ValueError`. All of these are covered by `tests/test_portfolio_stage_contracts.py`.
+
+Validation: `uv run pytest` passes 96 tests, including `tests/test_portfolio_crew_config.py`, `tests/test_portfolio_stage_contracts.py`, and the updated `tests/test_trading_flow.py`.
 
 ## Context and Orientation
 

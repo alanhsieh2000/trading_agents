@@ -19,6 +19,9 @@ from crewai.flow import Flow, listen, start  # noqa: E402
 
 from trading_agents.crews.analyst_crew.analyst_crew import run_analyst_stage  # noqa: E402
 from trading_agents.crews.research_crew.research_crew import run_research_stage  # noqa: E402
+from trading_agents.crews.portfolio_crew.portfolio_crew import (  # noqa: E402
+    run_portfolio_stage,
+)
 from trading_agents.crews.risk_management_crew.risk_management_crew import (  # noqa: E402
     run_risk_stage,
 )
@@ -42,6 +45,9 @@ TRADER_OUTPUT_FILES = {
 RISK_OUTPUT_FILES = {
     "risk_debate_history": "risk_debate_history.md",
 }
+PORTFOLIO_OUTPUT_FILES = {
+    "final_trade_decision": "final_trade_decision.md",
+}
 
 
 class TradingAgentsState(BaseModel):
@@ -55,6 +61,8 @@ class TradingAgentsState(BaseModel):
     investment_plan: dict[str, Any] = Field(default_factory=dict)
     trader_plan: dict[str, Any] = Field(default_factory=dict)
     risk_debate_history: str = ""
+    final_trade_decision: dict[str, Any] = Field(default_factory=dict)
+    lessons: list[dict[str, Any]] = Field(default_factory=list)
     output_dir: str = ""
 
 
@@ -148,7 +156,24 @@ class TradingAgentsFlow(Flow[TradingAgentsState]):
         return risk_outputs
 
     @listen(run_risk_management)
-    def save_outputs(self, _risk_outputs: dict[str, Any]) -> dict[str, Any]:
+    def run_portfolio(self, risk_outputs: dict[str, Any]) -> dict[str, Any]:
+        print(f"Running portfolio stage for {self.state.ticker} on {self.state.trade_date}")
+        portfolio_inputs: dict[str, Any] = {
+            "ticker": self.state.ticker,
+            "trade_date": self.state.trade_date,
+            "investment_plan": self.state.investment_plan,
+            "trader_plan": self.state.trader_plan,
+            "risk_debate_history": risk_outputs["risk_debate_history"],
+        }
+        portfolio_outputs = run_portfolio_stage(portfolio_inputs)
+        self.state.final_trade_decision = dict(portfolio_outputs["final_trade_decision"])
+        self.state.lessons = list(portfolio_outputs["lessons"])
+
+        print("Portfolio stage complete")
+        return portfolio_outputs
+
+    @listen(run_portfolio)
+    def save_outputs(self, _portfolio_outputs: dict[str, Any]) -> dict[str, Any]:
         output_dir = save_outputs(self.state)
         print(f"TradingAgents outputs saved to {output_dir}")
         return self.state.model_dump()
@@ -230,6 +255,10 @@ def save_outputs(state: TradingAgentsState) -> Path:
         state.risk_debate_history,
         encoding="utf-8",
     )
+    (output_dir / PORTFOLIO_OUTPUT_FILES["final_trade_decision"]).write_text(
+        _format_final_trade_decision(state.final_trade_decision),
+        encoding="utf-8",
+    )
 
     return output_dir
 
@@ -269,6 +298,20 @@ def _format_trader_plan(trader_plan: dict[str, Any]) -> str:
         ("Entry Price", trader_plan.get("entry_price", "")),
         ("Stop Loss", trader_plan.get("stop_loss", "")),
         ("Position Sizing", trader_plan.get("position_sizing", "")),
+    ]
+    return "\n\n".join(f"## {title}\n{value}".rstrip() for title, value in sections) + "\n"
+
+
+def _format_final_trade_decision(final_trade_decision: dict[str, Any]) -> str:
+    if not final_trade_decision:
+        return ""
+
+    sections = [
+        ("Rating", final_trade_decision.get("rating", "")),
+        ("Executive Summary", final_trade_decision.get("executive_summary", "")),
+        ("Investment Thesis", final_trade_decision.get("investment_thesis", "")),
+        ("Price Target", final_trade_decision.get("price_target", "")),
+        ("Time Horizon", final_trade_decision.get("time_horizon", "")),
     ]
     return "\n\n".join(f"## {title}\n{value}".rstrip() for title, value in sections) + "\n"
 

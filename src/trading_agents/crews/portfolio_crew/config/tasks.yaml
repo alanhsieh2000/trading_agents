@@ -1,0 +1,38 @@
+self_reflection:
+  name: self_reflection
+  description: |
+    Raw return: {raw_return}
+    Alpha vs {benchmark_name}: {alpha_return}
+    Final Decision: {final_decision}
+  expected_output: |
+    Cover in order:
+    1. Was the directional call correct? (cite the alpha figure)
+    2. Which part of the investment thesis held or failed?
+    3. One concrete lesson to apply to the next similar analysis.
+
+    Be specific and terse. Your output will be stored verbatim in a decision log and re-read by future analysts, so every word must earn its place.
+  agent: self_reflection_manager
+
+final_decision:
+  name: final_decision
+  description: |
+    The instrument to analyze is {ticker}. Use this exact ticker in every tool call, report, and recommendation, preserving any exchange suffix (e.g. `.TO`, `.L`, `.HK`, `.T`, `-USD`).
+
+    Based on the following context:
+
+    **Context:**
+    - Research Manager's investment plan: **{investment_plan}**
+    - Trader's transaction proposal: **{trader_plan}**
+    - Risk Analysts Debate History: **{history}**
+
+    Leverage these insights to make an informed and strategic decision.
+  expected_output: |
+    **Rating Scale** (use exactly one):
+    - **Buy**: Strong conviction to enter or add to position
+    - **Overweight**: Favorable outlook, gradually increase exposure
+    - **Hold**: Maintain current position, no action needed
+    - **Underweight**: Reduce exposure, take partial profits
+    - **Sell**: Exit position or avoid entry
+
+    Be decisive and ground every conclusion in specific evidence from the analysts.
+  agent: portfolio_manager

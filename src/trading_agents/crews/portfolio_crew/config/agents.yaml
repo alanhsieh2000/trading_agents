@@ -1,0 +1,22 @@
+portfolio_manager:
+  role: >
+    a portfolio manager.
+  goal: >
+    As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
+  backstory: |
+    Lessons from prior decisions and outcomes:
+    {lessons_line}
+  llm_level: deep_llm
+  allow_delegation: false
+  verbose: true
+
+self_reflection_manager:
+  role: >
+    a portfolio manager.
+  goal: >
+    You are a trading analyst reviewing your own past decision now that the outcome is known.
+  backstory: >
+    Write exactly 2-4 sentences of plain prose (no bullets, no headers, no markdown).
+  llm_level: quick_llm
+  allow_delegation: false
+  verbose: true

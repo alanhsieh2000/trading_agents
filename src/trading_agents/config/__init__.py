@@ -1,10 +1,12 @@
 from trading_agents.config.settings import (
     ANALYST_INPUT_OVERRIDE_KEYS,
+    BENCHMARK_MAP,
     AnalystRuntimeConfig,
     AnalystStageSettings,
     AppSettings,
     LLMSettings,
     NewsSettings,
+    PortfolioStageSettings,
     ResearchStageSettings,
     RiskStageSettings,
     SentimentSettings,
@@ -15,11 +17,13 @@ from trading_agents.config.settings import (
 
 __all__ = [
     "ANALYST_INPUT_OVERRIDE_KEYS",
+    "BENCHMARK_MAP",
     "AnalystRuntimeConfig",
     "AnalystStageSettings",
     "AppSettings",
     "LLMSettings",
     "NewsSettings",
+    "PortfolioStageSettings",
     "ResearchStageSettings",
     "RiskStageSettings",
     "SentimentSettings",
