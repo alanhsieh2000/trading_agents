@@ -1073,3 +1073,5 @@ final_decision:
     Be decisive and ground every conclusion in specific evidence from the analysts.
   agent: portfolio_manager
 ```
+
+The portfolio manager will use a deep LLM only for making the final decision.
