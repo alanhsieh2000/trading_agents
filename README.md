@@ -5,7 +5,7 @@ This project is a CrewAI-based reimplementation/replication of
 LLM financial trading framework proposed in the paper
 *TradingAgents: Multi-Agents LLM Financial Trading Framework*.
 
-## Project Goal
+# Project Goal
 
 This project aims to reproduce the core ideas of
 [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents)
@@ -29,7 +29,7 @@ Instead, it maps the TradingAgents architecture into CrewAI concepts:
 - **Tools**: data-retrieval and analysis utilities for prices, fundamentals,
   news, sentiment, technical indicators, and portfolio state.
 
-## Conceptual Architecture
+# Conceptual Architecture
 
 TradingAgents decomposes the trading decision process into several stages:
 
@@ -53,78 +53,78 @@ Portfolio Manager
    v
 Final Decision
 
-## Agents
+# Agents
 
 Agents are implemented as Agent instances within respective crew classes, which are decorated by @CrewBase. Their roles, goals, and backstories are defined in a separate agents.yaml file placed under the src/trading_agents/crews/[crew name]/config folder. This is the folder for the crew that the agent belongs to.
 
 The Analyst Crew is the exception to the one-upstream-agent-to-one-CrewAI-agent mapping. It now follows PROMPTS.md: one shared `analyst` agent performs the four analyst tasks sequentially, and tools are attached to tasks rather than to the agent. The upstream analyst URLs below are still prompt source material for the task descriptions and tool choices.
 
-### 1. Analyst Team
+## 1. Analyst Team
 
 The Analyst Team performs the first stage of information gathering and market
 interpretation. In this CrewAI implementation, one shared Analyst agent produces
 focused reports from four task-specific perspectives.
 
-#### Fundamentals Analyst
+### Fundamentals Analyst
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/analysts/fundamentals_analyst.py"
 
-#### Sentiment Analyst
+### Sentiment Analyst
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/analysts/sentiment_analyst.py"
 
-#### News Analyst
+### News Analyst
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/analysts/news_analyst.py"
 
-#### Market Analyst
+### Market Analyst
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/analysts/market_analyst.py"
 
-### 2. Research Team
+## 2. Research Team
 
 The Research Team consumes the Analyst Team reports and turns them into an
 explicit debate. The goal is to prevent the system from blindly accepting one
 interpretation of the data.
 
-#### Bull Researcher
+### Bull Researcher
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/researchers/bull_researcher.py"
 
-#### Bear Researcher
+### Bear Researcher
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/researchers/bear_researcher.py"
 
-#### Research Manager
+### Research Manager
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/managers/research_manager.py"
 
-### 3. Trader Agent
+## 3. Trader Agent
 
 The Trader Agent synthesizes all prior reports and proposes a concrete trading
 action.
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/trader/trader.py"
 
-### 4. Risk Management Team
+## 4. Risk Management Team
 
 The Risk Management Team evaluates the Trader Agent's proposal from multiple
 risk perspectives. Its purpose is to prevent attractive narratives from becoming
 uncontrolled portfolio exposure.
 
-#### Aggressive Risk Debator
+### Aggressive Risk Debator
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/risk_mgmt/aggressive_debator.py"
 
-#### Conservative Risk Debator
+### Conservative Risk Debator
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/risk_mgmt/conservative_debator.py"
 
-#### Neutral Risk Debator
+### Neutral Risk Debator
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/risk_mgmt/neutral_debator.py"
 
-### 5. Portfolio Manager
+## 5. Portfolio Manager
 
 The Portfolio Manager makes the final decision. This agent should not simply
 repeat the Trader Agent's proposal. It synthesizes the risk analysts' debate and
@@ -137,94 +137,96 @@ lessons that inform future decisions on the same instrument.
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/managers/portfolio_manager.py"
 
-## Tasks
+# Tasks
 
 Tasks are implemented as Task instances within respective crew classes, which are decorated by @CrewBase. Their description, expected output, and bound agent are defined in a separate tasks.yaml file placed under the src/trading_agents/crews/[crew name]/config folder. This is the folder for the crew that the task belongs to.
 
 For the Analyst Crew, all four tasks bind to the same `analyst` agent. Tool access is configured in `analyst_crew.py` on each Task constructor so the shared agent can use different tools for market, sentiment, news, and fundamentals work.
 
-### 1. Analyst Team
+## 1. Analyst Team
 
 The Analyst Team performs the first stage of information gathering and market
 interpretation. Four tasks are processed sequentially by one shared Analyst agent.
 
-#### Market Analysis
+### Market Analysis
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/analysts/market_analyst.py"
 
 The output of this task is market report.
 
-#### Sentiment Analysis
+### Sentiment Analysis
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/analysts/sentiment_analyst.py"
 
 The output of this task is sentiment report.
 
-#### News Analysis
+### News Analysis
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/analysts/news_analyst.py"
 
 The output of this task is news report.
 
-#### Fundamentals Analysis
+### Fundamentals Analysis
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/analysts/fundamentals_analyst.py"
 
 The output of this task is fundamentals report.
 
-### 2. Research Team
+## 2. Research Team
 
 The Research Team consumes the Analyst Team reports and turns them into an
 explicit discussion. The bull research focused on bullish thesis, the bear research focused on bearish thesis take turn to convince the research manager, who is focused on the balance of both researches.  
 
-#### Bull Research
+### Bull Research
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/researchers/bull_researcher.py"
 
 The output of this task is bull response.
 
-#### Bear Research
+### Bear Research
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/researchers/bear_researcher.py"
 
 The output of this task is bear response.
 
-#### Research Management
+### Research Management
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/managers/research_manager.py"
 
 The output of this task is investment plan.
 
-### 3. Trader Agent - Transaction Proposal
+## 3. Trader Agent - Transaction Proposal
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/trader/trader.py"
 
 The output of this task is a trader plan structured as `TraderProposal`.
 
-### 4. Risk Management Team
+## 4. Risk Management Team
 
 The Risk Management Team evaluates the Trader Agent's proposal from multiple
 risk perspectives. The aggressive risk opinion focuses on opportunity cost and upside capture, the conservative risk opinion focuses on capital preservation, and the neutral risk opinion focuses on the balance. The debate takes turn to produce the whole debate history in all aspects.
 
-#### Aggressive Risk Opinions
+### Aggressive Risk Opinions
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/risk_mgmt/aggressive_debator.py"
 
 The output of this task is aggressive response.
 
-#### Conservative Risk Opinions
+### Conservative Risk Opinions
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/risk_mgmt/conservative_debator.py"
 
 The output of this task is conservative response.
 
-#### Neutral Risk Opinions
+### Neutral Risk Opinions
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/risk_mgmt/neutral_debator.py"
 
 The output of this task is neutral response.
 
-### 5. Portfolio Manager - Self Reflection
+## 5. Portfolio Manager
+
+### Self Reflection
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/managers/portfolio_manager.py"
 
@@ -232,19 +234,19 @@ The output of this task is a short self-reflection (2-4 sentences) on a past
 decision, written back into the corresponding lesson record. The self-reflection
 runs once per just-updated lesson record before the final decision.
 
-### 5. Portfolio Manager - Final Decision
+### Final Decision
 
 Read "https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/agents/managers/portfolio_manager.py"
 
 The output of this task is final trade decision.
 
-## Crews
+# Crews
 
 Crews are implemented as crew classes, which are decorated by @CrewBase. All agents and tasks are defined as member functions, one function decorated with @agent for one agent and one function decorated with @task for one task. The crew itself is also defined as a member function decorated with @crew. Besides, two separate agents.yaml and tasks.yaml files placed under the src/trading_agents/crews/[crew name]/config folder defines the actual prompts and other information. 
 
 The generated content_crew reference has been removed. Use the implemented src/trading_agents/crews/analyst_crew package as the current CrewAI wiring reference for this project.
 
-### 1. Analyst Crew
+## 1. Analyst Crew
 
 This crew consists of one Analyst agent and four tasks, run sequentially:
 - Analyst for Market Analysis
@@ -266,7 +268,7 @@ The outputs of this crew are:
 - news report
 - fundamentals report
 
-### 2. Research Crew
+## 2. Research Crew
 
 This crew consists of three agents and three tasks:
 - Bull Researcher for Bull Research
@@ -312,7 +314,7 @@ appending them to the debate history. The main flow saves the research outputs
 to the run output directory as `debate_history.md` and `investment_plan.md`,
 alongside the four analyst reports.
 
-### 3. Trader Crew
+## 3. Trader Crew
 
 This crew consists of one agent and one task:
 - Trader Agent for `trader_decision`
@@ -337,7 +339,7 @@ The trader plan is structured as `TraderProposal` with:
 
 The `trader_decision` task should use `output_pydantic=TraderProposal`.
 
-### 4. Risk Management Crew
+## 4. Risk Management Crew
 
 This crew consists of three agents and three tasks:
 - Aggressive Risk Analyst for Aggressive Risk Opinions
@@ -367,7 +369,7 @@ The outputs of this crew are:
 
 For each debate iteration, the current debate history is added to the input. That is to say, within any debate iteration, the previous agent's output is added to the debate history and provided as input for the next agent's task.
 
-### 5. Portfolio Crew
+## 5. Portfolio Crew
 
 This crew consists of two agents and two tasks, even though it represents a
 one-person team. The Portfolio Manager plays two roles:
@@ -430,7 +432,7 @@ The `final_decision` task should use `output_pydantic=PortfolioDecision`. The
 lesson record and the list of retrieved lessons are backed by their own Pydantic
 types defined in the implementation.
 
-## Flow
+# Flow
 
 The flow consists of five crews in sequence:
 - Analyst Crew
@@ -442,15 +444,52 @@ The flow consists of five crews in sequence:
 The output of the flow is the Portfolio Crew's final trade decision: a
 `PortfolioDecision` carrying the final position rating and its supporting thesis.
 
+# Evaluation
+
+Following the performance comparison presented in the paper, section 6.1 and Table 1, we use the same stocks - AAPL, GOOGL, AMZN, and the same backtest period - from 2024/01/01 to 2024/03/29, for the evaluation data set. The metrics we will use is the cumulative return CR, which is (total trading profits during 2024/01/01 and 2024/03/29) / V_start * 100%. V_start is the close price of the stock on the first Buy decision made, or the close price of the stock on the first Overweight decision made divided by the weight associated with the Overweight decision. We will pick the larger one for V_start. If neither Buy nor Overweight decisions were made during the period, V_start is 1.
+
+## Dataset Preparation
+
+The only crew relying on external data is the analyst crew. The following tools are used by the crew:
+- fetch_reddit_posts,
+- fetch_stocktwits_messages,
+- get_balance_sheet,
+- get_cashflow,
+- get_fundamentals,
+- get_global_news,
+- get_income_statement,
+- get_indicators,
+- get_news,
+- get_stock_data
+
+There are 61 transaction days during the backtest period. On each transaction day, the TradingAgents needs to make decisions for all three stocks. Therefore, the above tools need to know they are called in the evaluation mode, and they need to retrieve data from the prepared dataset rather than external data sources in this mode.
+
+## Backtest
+
+Decisions made by the TradingAgents are exactly one of: Buy, Overweight, Hold, Underweight, Sell. To simulate the exchange, we follow these rules:
+- The position of the stock ranges from 0 to 1.
+- The weight associated with Overweight is the constant weight_over defined in settings with default value 0.5.
+- The weight associated with Underweight is the constant weight_under defined in settings with default value 0.5.
+- The transaction price is the close price of the transaction day.
+- For Buy decisions, raise the stock position to 1 if the current position is less than 1.
+- For Overweight decisions, raise the stock position to weight_over if the current position is less than weight_over.
+- For Hold decisions, remain the current stock position.
+- For Underweight decisions, reduce the stock position to weight_under if the current position is more than weight_under.
+- For Sell decisions, reduce the stock position to 0 if the current position is more than 0.
+- Underweight and Sell decisions will be ignored if the current position is 0.
+- When the stock position is raised, the cost of the position will be updated.
+- When the stock position is reduced, the cumulative profit or loss will be updated.
+- At the end of the backtest, there is always an additional Sell decision on the last transaction day to clear the stock position.
+
 # Installation
 
-## Customizing
+# Customizing
 
 **Add your `OPENAI_API_KEY` into the `.env` file**
 
 - Modify `src/trading_agents/main.py` to add custom inputs for your agents and tasks
 
-## Running the Project
+# Running the Project
 
 Run the default analyst flow with the default ticker and the current UTC trade date:
 
