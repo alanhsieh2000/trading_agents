@@ -1,4 +1,4 @@
-# Wire the End-to-End TradingAgents Flow and Evaluation
+# Wire the End-to-End TradingAgents Flow (Plan 08)
 
 This ExecPlan is a living document. The sections `Progress`, `Surprises & Discoveries`, `Decision Log`, and `Outcomes & Retrospective` must be kept up to date as work proceeds.
 
@@ -21,7 +21,7 @@ A user should be able to run the project with a trigger payload such as `{"ticke
 - [x] (2026-06-09) Extended the analyst-stage `TradingAgentsFlow` into the full end-to-end flow: `prepare_inputs`, `run_analysts`, `run_research`, `run_trader`, `run_risk_management`, `run_portfolio`, and `save_outputs`.
 - [x] (2026-06-09) Added output persistence for every stage via `save_outputs`.
 - [x] (2026-06-09) Added mocked end-to-end tests in `tests/test_trading_flow.py`.
-- [x] (2026-06-11) Split the evaluation out of this plan into `plans/08_evaluation_backtest.md` (the README CR backtest needs a prepared historical dataset, an evaluation execution mode, an exchange simulator, and an orchestration runner — far more than a YAML screen). This plan no longer owns evaluation.
+- [x] (2026-06-11) Split the evaluation out of this plan into `plans/07_evaluation_backtest.md` (the README CR backtest needs a prepared historical dataset, an evaluation execution mode, an exchange simulator, and an orchestration runner — far more than a YAML screen), then renumbered this flow plan from 07 to 08. This plan no longer owns evaluation.
 - [ ] Run the final smoke tests and record outputs here.
 - [x] (2026-06-09) Applied the runtime conventions from plans 02 through 06: `load_dotenv()` runs before flow execution in `main.py`, `gpt-4o-mini` stays the default agent LLM in crew YAML (the Portfolio Crew's final decision is the one documented exception, which uses the deep LLM), tools are bound at the task level, and tracing is enabled on the flow.
 
@@ -150,7 +150,7 @@ Fifth, add mocked end-to-end tests. Mock the stage helper functions to avoid LLM
 - Missing ticker defaults to `NVDA` or a documented default.
 - Invalid date raises a clear error before any crew runs.
 
-Evaluation is no longer part of this plan. The README's cumulative-return backtest (AAPL/GOOGL/AMZN over 2024-Q1) requires a prepared historical dataset, an evaluation execution mode, an exchange simulator, and an orchestration runner, which are specified separately in `plans/08_evaluation_backtest.md`. The qualitative `tests/eval_cases/trading_agent_eval_cases.yaml` screen is orthogonal to the CR backtest and is left for a possible future plan.
+Evaluation is no longer part of this plan. The README's cumulative-return backtest (AAPL/GOOGL/AMZN over 2024-Q1) requires a prepared historical dataset, an evaluation execution mode, an exchange simulator, and an orchestration runner, which are specified separately in `plans/07_evaluation_backtest.md`. The qualitative `tests/eval_cases/trading_agent_eval_cases.yaml` screen is orthogonal to the CR backtest and is left for a possible future plan.
 
 ## Concrete Steps
 
@@ -178,7 +178,7 @@ Run commands from `/app/trading_agents`.
 
        passed
 
-5. (Evaluation moved to plan 08 — see `plans/08_evaluation_backtest.md`.)
+5. (Evaluation moved to plan 07 — see `plans/07_evaluation_backtest.md`.)
 
 6. Run a no-live-services smoke test with mocked stage helpers, if provided:
 
@@ -218,7 +218,7 @@ Acceptance requires:
 - Mocked tests prove the structured `PortfolioDecision` is produced, threaded into state, and persisted.
 - A live run with credentials can execute the full sequence without changing code.
 
-Evaluation (the README cumulative-return backtest) is specified and accepted separately in `plans/08_evaluation_backtest.md`.
+Evaluation (the README cumulative-return backtest) is specified and accepted separately in `plans/07_evaluation_backtest.md`.
 
 The end-to-end mocked tests should fail before this plan is implemented because `TradingAgentsFlow` and the stage helpers do not yet exist. They should pass after implementation.
 
@@ -285,6 +285,6 @@ Revision Note: 2026-05-24 06:57Z Added plan 02 runtime conventions to the unimpl
 
 Revision Note: 2026-05-26 renumbered this file from plan 04 to plan 07 after splitting the former combined decision-stage plan into four crew-specific plans for sequential implementation.
 
-Revision Note: 2026-06-11 split the evaluation out of this plan into `plans/08_evaluation_backtest.md` and pushed back this plan's evaluation scope. After adding the README `# Evaluation` section, it became clear the cumulative-return backtest (AAPL/GOOGL/AMZN over 2024-Q1) needs a prepared historical dataset (several analyst data sources cannot be queried for a past window), an evaluation execution mode, an exchange simulator, and an orchestration runner — far beyond the single "evaluation checks" bullet this plan carried. This plan now owns only the end-to-end flow; the open evaluation checklist item, the "Sixth, add an evaluation runner …" paragraph, and the `tests/test_eval_cases.py` references were removed and replaced with pointers to plan 08. The qualitative `tests/eval_cases/trading_agent_eval_cases.yaml` screen is orthogonal to the CR backtest and remains unowned.
+Revision Note: 2026-06-11 split the evaluation out of this plan into `plans/07_evaluation_backtest.md` and pushed back this plan's evaluation scope, then renumbered this flow plan from 07 to 08 (renamed `plans/08_end_to_end_flow.md`) so the next-to-implement evaluation carries the active plan number 07. After adding the README `# Evaluation` section, it became clear the cumulative-return backtest (AAPL/GOOGL/AMZN over 2024-Q1) needs a prepared historical dataset (several analyst data sources cannot be queried for a past window), an evaluation execution mode, an exchange simulator, and an orchestration runner — far beyond the single "evaluation checks" bullet this plan carried. This plan now owns only the end-to-end flow; the open evaluation checklist item, the "Sixth, add an evaluation runner …" paragraph, and the `tests/test_eval_cases.py` references were removed and replaced with pointers to plan 07. The qualitative `tests/eval_cases/trading_agent_eval_cases.yaml` screen is orthogonal to the CR backtest and remains unowned.
 
 Revision Note: 2026-06-09 aligned this plan with `PROMPTS.md` (the latest source of truth). Replaced the stale `approve`/`reject` → `Hold`/trader-plan output contract with the Portfolio Crew's structured `PortfolioDecision` (5-tier `PortfolioRating` plus thesis and lesson records); updated the `TradingAgentsState` fields to the implemented dict/list shapes (added `debate_history` and `lessons`, removed `final_output`); renamed the final flow step from `finalize_result` to `save_outputs`; corrected the persisted artifact list (`debate_history.md`, `final_trade_decision.md`; dropped `portfolio_decision.txt` and `final_output.md`); documented the Portfolio Crew's deep-LLM final decision / quick-LLM self-reflection as the one exception to the `gpt-4o-mini` default; and marked the now-implemented Progress items. Remaining open item: the evaluation runner against `tests/eval_cases/trading_agent_eval_cases.yaml`.
