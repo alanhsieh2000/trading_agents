@@ -21,7 +21,7 @@ A user should be able to run the project with a trigger payload such as `{"ticke
 - [x] (2026-06-09) Extended the analyst-stage `TradingAgentsFlow` into the full end-to-end flow: `prepare_inputs`, `run_analysts`, `run_research`, `run_trader`, `run_risk_management`, `run_portfolio`, and `save_outputs`.
 - [x] (2026-06-09) Added output persistence for every stage via `save_outputs`.
 - [x] (2026-06-09) Added mocked end-to-end tests in `tests/test_trading_flow.py`.
-- [ ] Add evaluation checks using `tests/eval_cases/trading_agent_eval_cases.yaml`.
+- [x] (2026-06-11) Split the evaluation out of this plan into `plans/08_evaluation_backtest.md` (the README CR backtest needs a prepared historical dataset, an evaluation execution mode, an exchange simulator, and an orchestration runner — far more than a YAML screen). This plan no longer owns evaluation.
 - [ ] Run the final smoke tests and record outputs here.
 - [x] (2026-06-09) Applied the runtime conventions from plans 02 through 06: `load_dotenv()` runs before flow execution in `main.py`, `gpt-4o-mini` stays the default agent LLM in crew YAML (the Portfolio Crew's final decision is the one documented exception, which uses the deep LLM), tools are bound at the task level, and tracing is enabled on the flow.
 
@@ -150,7 +150,7 @@ Fifth, add mocked end-to-end tests. Mock the stage helper functions to avoid LLM
 - Missing ticker defaults to `NVDA` or a documented default.
 - Invalid date raises a clear error before any crew runs.
 
-Sixth, add an evaluation runner that reads `tests/eval_cases/trading_agent_eval_cases.yaml`. The first version can be lightweight and deterministic: it should run a mocked or live flow result through checks that flag missing expected evidence category terms, missing expected risk concern terms, and unacceptable failure mode phrases. Place the runner under `src/trading_agents/evaluation.py` or `tests/test_eval_cases.py`. Do not claim this replaces human financial review; it is a regression screen.
+Evaluation is no longer part of this plan. The README's cumulative-return backtest (AAPL/GOOGL/AMZN over 2024-Q1) requires a prepared historical dataset, an evaluation execution mode, an exchange simulator, and an orchestration runner, which are specified separately in `plans/08_evaluation_backtest.md`. The qualitative `tests/eval_cases/trading_agent_eval_cases.yaml` screen is orthogonal to the CR backtest and is left for a possible future plan.
 
 ## Concrete Steps
 
@@ -169,7 +169,6 @@ Run commands from `/app/trading_agents`.
 3. Add tests, for example:
 
        tests/test_trading_flow.py
-       tests/test_eval_cases.py
 
 4. Run mocked flow tests:
 
@@ -179,13 +178,7 @@ Run commands from `/app/trading_agents`.
 
        passed
 
-5. Run evaluation-case tests:
-
-       uv run pytest tests/test_eval_cases.py
-
-   Expected success after implementation:
-
-       passed
+5. (Evaluation moved to plan 08 — see `plans/08_evaluation_backtest.md`.)
 
 6. Run a no-live-services smoke test with mocked stage helpers, if provided:
 
@@ -223,8 +216,9 @@ Acceptance requires:
 - The flow accepts trigger payload JSON with `ticker` and `trade_date`.
 - The flow stores all intermediate artifacts in a per-run output directory.
 - Mocked tests prove the structured `PortfolioDecision` is produced, threaded into state, and persisted.
-- Evaluation tests read `tests/eval_cases/trading_agent_eval_cases.yaml` and fail clearly when expected evidence or risk concerns are missing from a candidate output.
 - A live run with credentials can execute the full sequence without changing code.
+
+Evaluation (the README cumulative-return backtest) is specified and accepted separately in `plans/08_evaluation_backtest.md`.
 
 The end-to-end mocked tests should fail before this plan is implemented because `TradingAgentsFlow` and the stage helpers do not yet exist. They should pass after implementation.
 
@@ -280,7 +274,7 @@ At the end of this plan, these commands should work:
 
     uv run python -c "from trading_agents.main import TradingAgentsFlow; print(TradingAgentsFlow)"
     uv run run_with_trigger '{"ticker":"NVDA","trade_date":"2024-05-24"}'
-    uv run pytest tests/test_trading_flow.py tests/test_eval_cases.py
+    uv run pytest tests/test_trading_flow.py
 
 The main flow should import only stage helper functions, not individual agent internals. This keeps `main.py` responsible for orchestration and each crew responsible for its own prompts, tasks, and implementation details.
 
@@ -290,5 +284,7 @@ Revision Note: 2026-05-24 06:57Z Added plan 02 runtime conventions to the unimpl
 
 
 Revision Note: 2026-05-26 renumbered this file from plan 04 to plan 07 after splitting the former combined decision-stage plan into four crew-specific plans for sequential implementation.
+
+Revision Note: 2026-06-11 split the evaluation out of this plan into `plans/08_evaluation_backtest.md` and pushed back this plan's evaluation scope. After adding the README `# Evaluation` section, it became clear the cumulative-return backtest (AAPL/GOOGL/AMZN over 2024-Q1) needs a prepared historical dataset (several analyst data sources cannot be queried for a past window), an evaluation execution mode, an exchange simulator, and an orchestration runner — far beyond the single "evaluation checks" bullet this plan carried. This plan now owns only the end-to-end flow; the open evaluation checklist item, the "Sixth, add an evaluation runner …" paragraph, and the `tests/test_eval_cases.py` references were removed and replaced with pointers to plan 08. The qualitative `tests/eval_cases/trading_agent_eval_cases.yaml` screen is orthogonal to the CR backtest and remains unowned.
 
 Revision Note: 2026-06-09 aligned this plan with `PROMPTS.md` (the latest source of truth). Replaced the stale `approve`/`reject` → `Hold`/trader-plan output contract with the Portfolio Crew's structured `PortfolioDecision` (5-tier `PortfolioRating` plus thesis and lesson records); updated the `TradingAgentsState` fields to the implemented dict/list shapes (added `debate_history` and `lessons`, removed `final_output`); renamed the final flow step from `finalize_result` to `save_outputs`; corrected the persisted artifact list (`debate_history.md`, `final_trade_decision.md`; dropped `portfolio_decision.txt` and `final_output.md`); documented the Portfolio Crew's deep-LLM final decision / quick-LLM self-reflection as the one exception to the `gpt-4o-mini` default; and marked the now-implemented Progress items. Remaining open item: the evaluation runner against `tests/eval_cases/trading_agent_eval_cases.yaml`.

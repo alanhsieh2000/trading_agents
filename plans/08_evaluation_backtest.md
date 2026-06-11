@@ -1,0 +1,486 @@
+# Build the TradingAgents Evaluation: a 2024-Q1 Cumulative-Return Backtest
+
+This ExecPlan is a living document. The sections `Progress`, `Surprises & Discoveries`, `Decision Log`, and `Outcomes & Retrospective` must be kept up to date as work proceeds.
+
+This repository contains `PLANS.md` at the project root. Maintain this document according to `PLANS.md`.
+
+
+## Purpose / Big Picture
+
+After this change, a user can measure how well the TradingAgents system actually
+trades, by reproducing the evaluation in the README's `# Evaluation` section (which
+follows the paper *TradingAgents: Multi-Agents LLM Financial Trading Framework*,
+section 6.1, Table 1). The system makes a daily decision — one of `Buy`,
+`Overweight`, `Hold`, `Underweight`, or `Sell` — for three stocks (AAPL, GOOGL,
+AMZN) on every trading day from 2024-01-01 through 2024-03-29. A simple exchange
+simulator turns those decisions into positions and profit, and the run reports the
+**cumulative return (CR)** for each stock.
+
+Concretely, after this plan a user runs two commands from the project root:
+
+    uv run build-eval-dataset
+    uv run run-eval
+
+and sees a report such as:
+
+    TradingAgents evaluation — 2024-01-01..2024-03-29 (60 trading days)
+    AAPL   CR = +4.2%
+    GOOGL  CR = +9.1%
+    AMZN   CR = +12.7%
+
+The hard part this plan solves is **data**. The agents need news, social sentiment,
+prices, indicators, and fundamentals *as they were during 2024-Q1*. Some of those
+sources cannot be queried for an arbitrary past window (see "Data availability"
+below). So the first command **builds a prepared dataset** of recorded tool outputs
+into a committed DuckDB file, and the second command runs the agents in an
+**evaluation mode** that reads from that dataset instead of calling live APIs. This
+makes the evaluation reproducible and offline (apart from the language-model calls).
+
+
+## Progress
+
+- [ ] (pending) Add `EvaluationSettings` to `src/trading_agents/config/settings.py` and wire it into `AppSettings`.
+- [ ] (pending) Add `exa-py` usage and an `EXA_API_KEY` requirement; create `src/trading_agents/evaluation/exa_sources.py`.
+- [ ] (pending) Create `src/trading_agents/evaluation/dataset.py` (DuckDB-backed `EvalDataset`).
+- [ ] (pending) Create `src/trading_agents/evaluation/build_dataset.py` and the `build-eval-dataset` entry point.
+- [ ] (pending) Create `src/trading_agents/evaluation/eval_tools.py` and the analyst-crew tool-injection seam.
+- [ ] (pending) Create `src/trading_agents/evaluation/backtest.py` (position simulator + CR).
+- [ ] (pending) Create `src/trading_agents/evaluation/run_eval.py` and the `run-eval` entry point.
+- [ ] (pending) Add unit tests `tests/test_eval_backtest.py` and `tests/test_eval_dataset.py`.
+- [ ] (pending) Build the committed dataset `data/eval_dataset.duckdb` and run a smoke evaluation.
+- [ ] (pending) Run the full evaluation and record CR per stock in `Outcomes & Retrospective`.
+
+Use timestamps (for example `(2026-06-11 09:00Z)`) when checking items off so a
+future contributor can gauge the rate of progress.
+
+
+## Surprises & Discoveries
+
+- Observation: yfinance cannot return historical news or social posts for a past
+  window. `yf.Ticker(symbol).news` returns only Yahoo's *current* feed; the
+  `start_date`/`end_date` arguments in `get_news`/`get_global_news` merely
+  client-side-filter that current feed.
+  Evidence: `src/trading_agents/tools/news.py` builds `items = list(getattr(yf.Ticker(clean_query), "news", None) or [])` and then filters by date; there is no historical query. Confirmed against the yfinance docs and issue tracker.
+- Observation: Reddit and StockTwits fetchers are recent-only.
+  Evidence: `src/trading_agents/tools/sentiment.py` queries `reddit.com/r/{sub}/search.json?...&t=week` and StockTwits `streams/symbol/{symbol}.json`, and filters Reddit posts against `now - recency_window_seconds`. Neither endpoint accepts a historical range.
+- Observation: `exa-py` is already a declared dependency but is unused in the
+  codebase, and Exa's search API supports `start_published_date`/`end_published_date`.
+  Evidence: `pyproject.toml` lists `exa-py>=2.13.0`; a repository-wide grep finds no import of it. Exa's `/search` documents published-date filters for the `news` category and for uncategorized searches.
+- Observation: 2024-03-29 is Good Friday, when US markets are closed, so the real
+  last trading day in the window is 2024-03-28. The README cites 61 trading days; the
+  actual NYSE count for 2024-01-02..2024-03-28 is ~60.
+  Evidence: to be reconfirmed by counting rows in the built `prices` table; logged here so the discrepancy is expected rather than alarming.
+
+Add new observations here as they arise, with a short evidence snippet (test output
+is ideal).
+
+
+## Decision Log
+
+- Decision: Split the evaluation out of `plans/07_end_to_end_flow_and_evaluation.md`
+  into this plan, and push plan 07's evaluation scope back.
+  Rationale: The evaluation needs a prepared historical dataset, an evaluation
+  execution mode, an exchange simulator, and an orchestration runner — far more than
+  the single "evaluation checks" bullet plan 07 carried. Plan 07 remains focused on
+  wiring the end-to-end flow.
+  Date/Author: 2026-06-11 / Claude
+
+- Decision: Use a record/replay design — a one-time dataset build, then offline
+  evaluation runs that read recorded tool outputs.
+  Rationale: The README mandates a prepared dataset because several sources cannot be
+  queried historically; record/replay also makes the 3-stock × ~60-day evaluation
+  deterministic and cheap to re-run (only language-model calls remain live).
+  Date/Author: 2026-06-11 / Claude
+
+- Decision: Source historical news and social sentiment from Exa with published-date
+  filters (`EXA_API_KEY` required); store the prepared dataset as a single committed
+  DuckDB file under `data/`.
+  Rationale: `exa-py` is already a dependency and Exa supports historical date
+  filtering; Finnhub's free tier only covers ~1 year of history, which cannot reach
+  2024 from 2026. DuckDB (`duckdb` is already a dependency) gives a single,
+  query-friendly, committable artifact.
+  Date/Author: 2026-06-11 / Claude (confirmed with the user)
+
+- Decision: The portfolio crew is not modified; the evaluation passes a
+  dataset-backed `fetch_series` into `run_portfolio_stage`.
+  Rationale: `run_portfolio_stage` already accepts a `fetch_series` parameter, so the
+  realized-return math can read recorded prices without touching the crew.
+  Date/Author: 2026-06-11 / Claude
+
+Record every further decision here, with the reasoning, as the plan evolves.
+
+
+## Outcomes & Retrospective
+
+To be written at the first milestone completion and at full completion. It must
+summarize what was achieved, what remains, the measured CR per stock compared to the
+paper's Table 1, and lessons learned. Until then this section is intentionally a
+placeholder.
+
+
+## Context and Orientation
+
+This section assumes no prior knowledge of the repository. Read it before editing.
+
+The project is a CrewAI reimplementation of TradingAgents. A *crew* is a team of
+language-model agents that run *tasks* in order; a *flow* chains crews together. The
+end-to-end flow lives in `src/trading_agents/main.py` as `TradingAgentsFlow`, which
+runs five stages in sequence and returns a final structured decision:
+
+1. Analyst stage — `run_analyst_stage` in `src/trading_agents/crews/analyst_crew/analyst_crew.py`. Produces four text reports (market, sentiment, news, fundamentals). **This is the only stage that calls external data sources.**
+2. Research stage — `run_research_stage` in `src/trading_agents/crews/research_crew/research_crew.py`.
+3. Trader stage — `run_trader_stage` in `src/trading_agents/crews/trader_crew/trader_crew.py`.
+4. Risk stage — `run_risk_stage` in `src/trading_agents/crews/risk_management_crew/risk_management_crew.py`.
+5. Portfolio stage — `run_portfolio_stage` in `src/trading_agents/crews/portfolio_crew/portfolio_crew.py`. Returns a `PortfolioDecision` whose `rating` is exactly one of `Buy`, `Overweight`, `Hold`, `Underweight`, `Sell` (defined in `src/trading_agents/schemas.py`).
+
+The flow takes a *trigger payload* — a small dictionary with `ticker` and
+`trade_date` (a date string in `YYYY-MM-DD` form) — and threads those plus each
+stage's output into the next stage.
+
+The ten data tools used by the analyst stage are:
+
+- `get_stock_data`, `get_indicators` in `src/trading_agents/tools/market_data.py` (the underlying functions are `get_stock_data_text(ticker, start_date, end_date)` and `get_indicators_text(ticker, start_date, end_date, indicators)`; both use `yf.download`).
+- `get_news`, `get_global_news` in `src/trading_agents/tools/news.py` (use `yf.Ticker(...).news`; the helper `_format_news_block(heading, records)` renders the output text).
+- `fetch_reddit_posts`, `fetch_stocktwits_messages` in `src/trading_agents/tools/sentiment.py` (plain functions, not CrewAI tools; they hit Reddit and StockTwits HTTP endpoints).
+- `get_fundamentals`, `get_balance_sheet`, `get_cashflow`, `get_income_statement` in `src/trading_agents/tools/fundamentals.py` (use `yf.Ticker(...).info` and the financial-statement attributes).
+
+How the analyst stage assembles its inputs is important for the evaluation seam.
+`prepare_analyst_inputs(inputs)` in `analyst_crew.py`:
+
+- normalizes `ticker` and reads `current_date`/`trade_date`;
+- computes `start_date = trade_date − lookback_days` (default 7) and `end_date = trade_date`;
+- **pre-fetches three text blocks directly** (not via the crew's tools): `news_sentiment_block` (from `get_news._run(...)`), `stocktwits_block` (from `fetch_stocktwits_messages(...)`), and `reddit_block` (from `fetch_reddit_posts(...)`). These feed the sentiment task, which has no bound tools.
+
+The crew's other tasks bind tools directly in `AnalystCrew`: the market task binds
+`[get_stock_data, get_indicators]`, the news task binds `[get_news, get_global_news]`,
+and the fundamentals task binds the four fundamentals tools. The sentiment task binds
+no tools.
+
+Runtime configuration lives in `src/trading_agents/config/settings.py`. `AppSettings`
+is a `pydantic_settings.BaseSettings` with `env_prefix="TRADING_AGENTS_"` and nested
+delimiter `__`, so a field like `analyst_stage.lookback_days` is overridden by the
+environment variable `TRADING_AGENTS_ANALYST_STAGE__LOOKBACK_DAYS`. `get_settings()`
+is decorated with `functools.lru_cache`, so it returns a singleton; after changing
+environment variables in-process you must call `get_settings.cache_clear()` for the
+change to take effect. Relevant existing fields: `analyst_stage.lookback_days` (7),
+`sentiment.reddit_recency_window_seconds` (604800), `portfolio_stage.max_holding_days`
+(5), `portfolio_stage.max_lessons` (30), and the benchmark map (US tickers map to
+`SPY`).
+
+The portfolio stage's realized-return math lives in
+`src/trading_agents/crews/portfolio_crew/lesson_store.py`. The key functions are pure
+and operate on a *close-price series* — a list of `(date, close)` tuples sorted
+ascending: `compute_realized_metrics(instrument, benchmark, trade_date, max_holding_days)`
+returns `(raw_return, alpha_return, holding_days)`. `default_fetch_series(symbol, trade_date)`
+is the live yfinance-backed fetcher, and `run_portfolio_stage(inputs, *, fetch_series=...)`
+accepts a substitute fetcher — this is the seam the evaluation uses to feed prices
+from the dataset.
+
+Definitions used in this plan:
+
+- *Backtest window*: 2024-01-01 through 2024-03-29 (inclusive), the period over which decisions are made and CR is measured.
+- *Buffer*: 2023-12-01 through 2023-12-31, recorded so the configurable look-back windows (`lookback_days`, the Reddit recency window) have data before the first trading day. Prices additionally extend ~14 days past the window end so holding-period returns can be computed for late decisions.
+- *Transaction day* / *trading day*: a date on which the exchange is open, identified by the presence of a benchmark (SPY) close price in the dataset.
+- *Prepared dataset*: a committed DuckDB file holding the recorded text output of every analyst tool for every (ticker, trading day), plus a daily close-price table.
+- *Evaluation mode*: a runtime mode (`settings.evaluation.enabled == True`) in which the analyst tools and the pre-fetched sentiment blocks read from the prepared dataset instead of calling live APIs.
+- *Cumulative return (CR)*: per the README, `total_trading_profit / V_start × 100%`, where `V_start = max(close_at_first_Buy, close_at_first_Overweight / weight_over)`, or `1` if neither a Buy nor an Overweight decision was made.
+
+### Data availability (the crux)
+
+Audited against the backtest window, queried from 2026:
+
+- Prices and indicators are fully available historically (`yf.download(start, end)`), so the builder can record them by calling the existing `get_stock_data_text` / `get_indicators_text`.
+- Financial statements return real filings but yfinance keeps only ~4 recent periods, so some 2023-2024 quarters may have rolled off; `get_fundamentals` (`.info`) is a current snapshot, not point-in-time. The builder records best-effort current values; SEC EDGAR is noted as a future point-in-time upgrade. This is acceptable because the profile and statement fields are slow-moving context, and the dominant CR drivers are price action and the daily decisions.
+- News (`get_news`, `get_global_news`) and social posts (Reddit, StockTwits) are **not** historically queryable through the existing tools, so the builder sources them from **Exa** with published-date filters.
+
+
+## Plan of Work
+
+The work is additive: new code lives in a new package `src/trading_agents/evaluation/`,
+and the only edits to existing files are a new settings block, a small tool-injection
+seam in the analyst crew, two new script entry points in `pyproject.toml`, a pointer
+edit in plan 07, and an `EXA_API_KEY` note in the README. Live behavior is unchanged
+unless `settings.evaluation.enabled` is true.
+
+First, extend settings. In `src/trading_agents/config/settings.py`, define
+`EvaluationSettings(BaseModel)` with fields `enabled: bool = False`,
+`dataset_path: str = "data/eval_dataset.duckdb"`,
+`tickers: tuple[str, ...] = ("AAPL", "GOOGL", "AMZN")`, `benchmark: str = "SPY"`,
+`start_date: str = "2024-01-01"`, `end_date: str = "2024-03-29"`,
+`buffer_start_date: str = "2023-12-01"`, `price_tail_days: int = 14`,
+`weight_over: float = 0.5`, and `weight_under: float = 0.5`. Add
+`evaluation: EvaluationSettings = EvaluationSettings()` to `AppSettings`. The
+`weight_over`/`weight_under` defaults are the README backtest constants.
+
+Second, add an Exa source module `src/trading_agents/evaluation/exa_sources.py`. It
+constructs an Exa client from `EXA_API_KEY` and exposes functions that return text
+blocks shaped like the existing tools' output, so downstream prompts are byte-for-byte
+familiar: `fetch_news_via_exa(query, start_date, end_date, limit)` (Exa `news` search
+with `start_published_date`/`end_published_date`, rendered in the
+`_format_news_block` style imported from `trading_agents.tools.news`),
+`fetch_global_news_via_exa(curr_date, look_back_days, limit)`,
+`fetch_reddit_via_exa(ticker, start_date, end_date, ...)` and
+`fetch_stocktwits_via_exa(ticker, start_date, end_date, ...)` (domain-restricted Exa
+searches using `include_domains=["reddit.com"]` / `["stocktwits.com"]`, rendered to
+match the sentiment block format, with a graceful "No data available …" fallback).
+Only the builder imports this module.
+
+Third, add the dataset layer `src/trading_agents/evaluation/dataset.py`. Define
+`EvalDataset` wrapping a DuckDB connection with two tables created on demand:
+`tool_outputs(tool_name TEXT, ticker TEXT, as_of_date TEXT, payload TEXT, PRIMARY KEY (tool_name, ticker, as_of_date))`
+and `prices(symbol TEXT, date TEXT, close DOUBLE, PRIMARY KEY (symbol, date))`. Provide
+read methods `tool_output(tool_name, ticker, as_of_date) -> str` (raising a clear error
+if a needed row is missing, so eval runs fail loudly rather than silently feeding empty
+data), `close_series(symbol) -> list[tuple[str, float]]` (ascending), and
+`transaction_days() -> list[str]` (benchmark dates within `[start_date, end_date]`).
+Provide idempotent upsert helpers `put_tool_output(...)` and `put_prices(symbol, rows)`
+used by the builder (use `INSERT OR REPLACE`).
+
+Fourth, add the builder `src/trading_agents/evaluation/build_dataset.py` with a
+`build-eval-dataset` console entry point. It (1) downloads daily closes for each ticker
+and the benchmark over `buffer_start_date … end_date + price_tail_days` and fills
+`prices`; (2) derives the trading-day list from the benchmark price index within the
+window; (3) for each ticker × trading day, records into `tool_outputs` the text from
+`get_stock_data_text`/`get_indicators_text` (called with the same
+`start = trade_date − lookback_days`, `end = trade_date` the eval flow uses), the Exa
+news and global-news blocks, the Exa Reddit and StockTwits blocks, and best-effort
+fundamentals/statement text; (4) upserts idempotently. Support `--tickers` and
+`--limit-days` for partial builds. Print a one-line summary (rows written, trading-day
+count) so the Good-Friday discrepancy is visible.
+
+Fifth, add evaluation tools and the analyst-crew seam. In
+`src/trading_agents/evaluation/eval_tools.py`, define dataset-backed `BaseTool`
+subclasses (one per analyst tool name) constructed with `(EvalDataset, ticker, as_of_date)`
+whose `_run(...)` ignores the language model's arguments and returns
+`dataset.tool_output(name, ticker, as_of_date)`. Then make `AnalystCrew` accept injected
+tools: refactor `src/trading_agents/crews/analyst_crew/analyst_crew.py` so the
+per-task tool lists come from a small provider (default = the current live tool
+instances), and have `run_analyst_stage` build dataset-backed tools when
+`get_settings().evaluation.enabled` is true. In the same file, make
+`prepare_analyst_inputs` read `news_sentiment_block`, `stocktwits_block`, and
+`reddit_block` from the dataset when evaluation mode is enabled (keyed by ticker and
+trade date), instead of calling the live functions. Keep the change minimal and
+preserve the existing behavior when evaluation mode is off.
+
+Sixth, add the simulator `src/trading_agents/evaluation/backtest.py` as pure functions.
+`simulate_position(decisions, closes, weight_over, weight_under)` walks a chronological
+list of `(date, rating)` decisions with the matching close prices and applies the
+README rules exactly: position in `[0, 1]`; transaction price is the trade-day close;
+`Buy` raises to 1 if below 1; `Overweight` raises to `weight_over` if below it; `Hold`
+holds; `Underweight` reduces to `weight_under` if above it; `Sell` reduces to 0 if above
+0; `Underweight` and `Sell` are ignored at zero position; on raises the cost basis is
+updated, on reductions realized profit accrues; a forced `Sell` is appended on the last
+trading day. `cumulative_return(...)` computes CR with `V_start` as defined above
+(`V_start = 1` when neither Buy nor Overweight occurred). These functions take prices and
+decisions as arguments and perform no I/O, so they are unit-testable without any network.
+
+Seventh, add the orchestrator `src/trading_agents/evaluation/run_eval.py` with a
+`run-eval` console entry point. It sets `TRADING_AGENTS_EVALUATION__ENABLED=true` and
+calls `get_settings.cache_clear()` before importing the stage helpers (or imports them
+lazily), opens the dataset, and uses an isolated lessons directory (for example a
+`LessonStore(base_dir="output/eval/lessons")`) and a dataset-backed `fetch_series`
+reading the `prices` table. It iterates the trading days **chronologically** (the
+portfolio lesson store accumulates lessons across days), and for each day runs each
+ticker through the five stages — either by kicking off `TradingAgentsFlow` per
+(ticker, day) or by calling the stage helpers directly — capturing the
+`PortfolioDecision.rating`. It feeds the per-(ticker, date) decisions into the simulator
+and writes a report (markdown and CSV) under `output/eval/`, including a header noting
+the run is language-model-expensive. Support `--tickers` and `--limit-days` for cheap
+smoke runs.
+
+Eighth, register the entry points in `pyproject.toml` under `[project.scripts]`:
+`build-eval-dataset = "trading_agents.evaluation.build_dataset:main"` and
+`run-eval = "trading_agents.evaluation.run_eval:main"`. Add `EXA_API_KEY` to the
+README's Installation/Customizing notes and to the project `.env` expectations.
+
+Ninth, push back plan 07. In `plans/07_end_to_end_flow_and_evaluation.md`, remove the
+open evaluation checklist item and the "Sixth, add an evaluation runner …" paragraph,
+replace them with a one-line pointer to this plan, and add a Revision Note recording the
+split. The existing `tests/eval_cases/trading_agent_eval_cases.yaml` is a separate
+qualitative regression screen, orthogonal to the CR backtest, and is left for a possible
+future plan.
+
+
+## Concrete Steps
+
+Run all commands from `/app/trading_agents`.
+
+1. Confirm the current settings load and that the analyst stage helpers import:
+
+       uv run python -c "from trading_agents.config import get_settings; print(type(get_settings()).__name__)"
+       uv run python -c "from trading_agents.crews.analyst_crew.analyst_crew import run_analyst_stage, prepare_analyst_inputs; print('analyst ok')"
+
+   Expected: `AppSettings` and `analyst ok`.
+
+2. After adding `EvaluationSettings`, verify it is reachable:
+
+       uv run python -c "from trading_agents.config import get_settings; print(get_settings().evaluation.tickers, get_settings().evaluation.enabled)"
+
+   Expected:
+
+       ('AAPL', 'GOOGL', 'AMZN') False
+
+3. Write the unit tests and run them (they must fail before the simulator/dataset code
+   exists and pass after):
+
+       uv run pytest tests/test_eval_backtest.py tests/test_eval_dataset.py
+
+   Expected after implementation: all tests pass. The backtest tests assert the README
+   rules and the CR formula on hand-built decision sequences; the dataset tests round-trip
+   rows through a temporary DuckDB file and confirm a dataset-backed eval tool returns the
+   recorded payload.
+
+4. Build a small dataset slice (needs `EXA_API_KEY` and network for prices/news):
+
+       uv run build-eval-dataset --tickers AAPL --limit-days 3
+
+   Expected: a summary line reporting that `data/eval_dataset.duckdb` now holds
+   `tool_outputs` rows for the ten tool names × AAPL × 3 days, plus `prices` rows for AAPL
+   and SPY. Inspect with:
+
+       uv run python -c "from trading_agents.evaluation.dataset import EvalDataset; d=EvalDataset(); print(len(d.transaction_days()), 'days'); print(d.tool_output('get_stock_data','AAPL',d.transaction_days()[0])[:120])"
+
+5. Run an offline evaluation smoke run over the slice (needs `OPENAI_API_KEY`; no other
+   network):
+
+       uv run run-eval --tickers AAPL --limit-days 3
+
+   Expected: a console summary and an `output/eval/` report listing each day's rating for
+   AAPL and a CR value. No live calls should be made to yfinance/Reddit/StockTwits — the
+   analyst tools and the pre-fetched sentiment blocks read from the dataset.
+
+6. Build the full dataset and run the full evaluation (language-model-expensive):
+
+       uv run build-eval-dataset
+       uv run run-eval
+
+   Expected: a report giving CR for AAPL, GOOGL, and AMZN over the window. Record the
+   numbers in `Outcomes & Retrospective` and compare them qualitatively to Table 1.
+
+7. Commit the dataset and code:
+
+       git add data/eval_dataset.duckdb src/trading_agents/evaluation tests/test_eval_*.py
+       git commit
+
+
+## Validation and Acceptance
+
+Acceptance is behavioral:
+
+- `uv run pytest tests/test_eval_backtest.py tests/test_eval_dataset.py` passes; the new
+  tests fail on a clean checkout before this plan and pass after.
+- `uv run build-eval-dataset --tickers AAPL --limit-days 3` produces a DuckDB file with
+  the expected `tool_outputs` and `prices` rows, and is idempotent (running it twice does
+  not duplicate rows).
+- `uv run run-eval --tickers AAPL --limit-days 3` produces a per-day rating list and a CR
+  value while reading only from the dataset for analyst data (verifiable by running with
+  network disabled, or by asserting in a test that the dataset-backed tools were used).
+- The full `uv run run-eval` reports a CR per stock over 2024-Q1.
+
+A concrete simulator acceptance example to encode as a test: with `weight_over = 0.5`,
+a single `Buy` on day 1 at close 100, holds through, and the forced `Sell` on the last
+day at close 110, yields realized profit 10 and `V_start = 100`, so `CR = +10.0%`. A
+Hold-only sequence yields `V_start = 1` and `CR` equal to the realized profit (0 if no
+position is ever taken) as a percentage.
+
+
+## Idempotence and Recovery
+
+The dataset build uses `INSERT OR REPLACE`, so it can be run repeatedly and partially
+(via `--tickers`/`--limit-days`) without duplicating rows; rerunning refreshes existing
+rows. The evaluation run writes only under `output/eval/` and uses an isolated lessons
+directory there, so it never disturbs ordinary `output/<ticker>_<date>/` run artifacts;
+delete `output/eval/` to start a clean evaluation. If the build is interrupted, rerun it
+— completed (ticker, day) rows are simply overwritten. If `EXA_API_KEY` is missing, the
+builder must fail with a clear message before doing partial work for the news/social
+tools. If a needed `tool_outputs` row is missing at evaluation time, `EvalDataset.tool_output`
+raises a clear error naming the tool/ticker/date so the gap is obvious rather than masked
+by empty input.
+
+
+## Artifacts and Notes
+
+Representative builder summary (illustrative):
+
+    Built data/eval_dataset.duckdb
+    tickers: AAPL, GOOGL, AMZN | benchmark: SPY
+    trading days in window: 60 (2024-01-02 .. 2024-03-28)
+    tool_outputs rows: 1800 | prices rows: 352
+    note: 2024-03-29 is Good Friday (market closed); last trading day is 2024-03-28
+
+Representative evaluation report (illustrative):
+
+    TradingAgents evaluation — 2024-01-01..2024-03-29 (60 trading days)
+    weight_over=0.5 weight_under=0.5 | language-model calls: 180 flow runs
+    AAPL   first Buy 2024-01-09 @ 185.14 | V_start=185.14 | CR = +4.2%
+    GOOGL  first Overweight 2024-01-11 @ 142.30 | V_start=284.60 | CR = +9.1%
+    AMZN   first Buy 2024-01-05 @ 145.24 | V_start=145.24 | CR = +12.7%
+
+Known limitations to keep in mind: fundamentals are best-effort current snapshots, not
+point-in-time; the trading-day count is governed by the actual price calendar, not the
+README's "61"; and the full run is language-model-expensive, which is why `--limit-days`
+exists.
+
+
+## Interfaces and Dependencies
+
+Use these libraries and modules: `duckdb` for the dataset (already a dependency),
+`exa-py` for historical news/social (already a dependency; needs `EXA_API_KEY`),
+`yfinance` for prices/indicators/fundamentals (already used by the tools), and the
+existing crew stage helpers in `src/trading_agents/main.py` for orchestration.
+
+At the end of this plan these names must exist:
+
+In `src/trading_agents/config/settings.py`:
+
+    class EvaluationSettings(BaseModel):
+        enabled: bool
+        dataset_path: str
+        tickers: tuple[str, ...]
+        benchmark: str
+        start_date: str
+        end_date: str
+        buffer_start_date: str
+        price_tail_days: int
+        weight_over: float
+        weight_under: float
+    # AppSettings gains: evaluation: EvaluationSettings
+
+In `src/trading_agents/evaluation/dataset.py`:
+
+    class EvalDataset:
+        def __init__(self, path: str | None = None) -> None: ...
+        def tool_output(self, tool_name: str, ticker: str, as_of_date: str) -> str: ...
+        def close_series(self, symbol: str) -> list[tuple[str, float]]: ...
+        def transaction_days(self) -> list[str]: ...
+        def put_tool_output(self, tool_name: str, ticker: str, as_of_date: str, payload: str) -> None: ...
+        def put_prices(self, symbol: str, rows: list[tuple[str, float]]) -> None: ...
+
+In `src/trading_agents/evaluation/backtest.py`:
+
+    def simulate_position(decisions: list[tuple[str, str]], closes: dict[str, float], weight_over: float, weight_under: float) -> "BacktestResult": ...
+    def cumulative_return(result: "BacktestResult", weight_over: float) -> float: ...
+
+In `src/trading_agents/evaluation/exa_sources.py`:
+
+    def fetch_news_via_exa(query: str, start_date: str, end_date: str, limit: int) -> str: ...
+    def fetch_global_news_via_exa(curr_date: str, look_back_days: int, limit: int) -> str: ...
+    def fetch_reddit_via_exa(ticker: str, start_date: str, end_date: str, limit: int) -> str: ...
+    def fetch_stocktwits_via_exa(ticker: str, start_date: str, end_date: str, limit: int) -> str: ...
+
+In `src/trading_agents/evaluation/build_dataset.py` and `run_eval.py`, a `main()` each,
+registered as `build-eval-dataset` and `run-eval` in `pyproject.toml`.
+
+The analyst crew (`src/trading_agents/crews/analyst_crew/analyst_crew.py`) must keep its
+existing public functions `run_analyst_stage`, `prepare_analyst_inputs`, and
+`extract_analyst_reports` working unchanged when evaluation mode is off, while gaining an
+internal seam that swaps in dataset-backed tools and dataset-sourced sentiment blocks when
+`get_settings().evaluation.enabled` is true.
+
+Revision Note: 2026-06-11 Initial ExecPlan drafted after auditing the ten analyst data
+tools against the 2024-Q1 backtest window, confirming that news and social sources are not
+historically queryable through the existing tools, confirming Exa (already a dependency)
+supports published-date filtering, and confirming with the user the choice of Exa for
+news/social and a committed DuckDB dataset. This plan was split out of
+`plans/07_end_to_end_flow_and_evaluation.md`, whose evaluation scope is correspondingly
+pushed back.
