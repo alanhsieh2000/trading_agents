@@ -39,14 +39,14 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 
 ## Progress
 
-- [ ] (pending) Add `EvaluationSettings` to `src/trading_agents/config/settings.py` and wire it into `AppSettings`.
+- [x] (2026-06-11) Added `EvaluationSettings` to `src/trading_agents/config/settings.py`, wired it into `AppSettings`, and exported it from `config/__init__.py`.
 - [ ] (pending) Add `exa-py` usage and an `EXA_API_KEY` requirement; create `src/trading_agents/evaluation/exa_sources.py`.
-- [ ] (pending) Create `src/trading_agents/evaluation/dataset.py` (DuckDB-backed `EvalDataset`).
+- [x] (2026-06-11) Created `src/trading_agents/evaluation/dataset.py` (DuckDB-backed `EvalDataset`, `tool_outputs` + `prices` tables, idempotent upserts).
 - [ ] (pending) Create `src/trading_agents/evaluation/build_dataset.py` and the `build-eval-dataset` entry point.
-- [ ] (pending) Create `src/trading_agents/evaluation/eval_tools.py` and the analyst-crew tool-injection seam.
-- [ ] (pending) Create `src/trading_agents/evaluation/backtest.py` (position simulator + CR).
+- [x] (2026-06-11) Created `src/trading_agents/evaluation/eval_tools.py` (dataset-backed `DatasetBackedTool` + `build_dataset_tools`). Remaining: the analyst-crew tool-injection seam.
+- [x] (2026-06-11) Created `src/trading_agents/evaluation/backtest.py` (`simulate_position` + `cumulative_return`).
 - [ ] (pending) Create `src/trading_agents/evaluation/run_eval.py` and the `run-eval` entry point.
-- [ ] (pending) Add unit tests `tests/test_eval_backtest.py` and `tests/test_eval_dataset.py`.
+- [x] (2026-06-11) Added unit tests `tests/test_eval_backtest.py` (10) and `tests/test_eval_dataset.py` (7); all pass, full suite 113 passed with no regressions.
 - [ ] (pending) Build the committed dataset `data/eval_dataset.duckdb` and run a smoke evaluation.
 - [ ] (pending) Run the full evaluation and record CR per stock in `Outcomes & Retrospective`.
 

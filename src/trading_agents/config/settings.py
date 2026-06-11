@@ -66,6 +66,30 @@ class PortfolioStageSettings(BaseModel):
     benchmark_map: dict[str, str] = Field(default_factory=lambda: dict(BENCHMARK_MAP))
 
 
+class EvaluationSettings(BaseModel):
+    """Settings for the 2024-Q1 cumulative-return backtest evaluation.
+
+    When ``enabled`` is true, the analyst tools and the analyst stage's
+    pre-fetched sentiment blocks read recorded payloads from the prepared
+    DuckDB dataset at ``dataset_path`` instead of calling live APIs. See
+    ``plans/07_evaluation_backtest.md``.
+    """
+
+    enabled: bool = False
+    dataset_path: str = Field(default="data/eval_dataset.duckdb", min_length=1)
+    tickers: tuple[str, ...] = ("AAPL", "GOOGL", "AMZN")
+    benchmark: str = Field(default="SPY", min_length=1)
+    start_date: str = Field(default="2024-01-01", min_length=1)
+    end_date: str = Field(default="2024-03-29", min_length=1)
+    buffer_start_date: str = Field(default="2023-12-01", min_length=1)
+    # Extra calendar days of prices recorded past ``end_date`` so holding-window
+    # returns can be computed for decisions late in the backtest window.
+    price_tail_days: int = Field(default=14, ge=0)
+    # Exchange-simulator constants from the README "Backtest" section.
+    weight_over: float = Field(default=0.5, ge=0.0, le=1.0)
+    weight_under: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
 class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="TRADING_AGENTS_",
@@ -79,6 +103,7 @@ class AppSettings(BaseSettings):
     research_stage: ResearchStageSettings = ResearchStageSettings()
     risk_stage: RiskStageSettings = RiskStageSettings()
     portfolio_stage: PortfolioStageSettings = PortfolioStageSettings()
+    evaluation: EvaluationSettings = EvaluationSettings()
     llm: LLMSettings = LLMSettings()
 
 
