@@ -23,7 +23,7 @@ Concretely, after this plan a user runs two commands from the project root:
 
 and sees a report such as:
 
-    TradingAgents evaluation — 2024-01-01..2024-03-29 (60 trading days)
+    TradingAgents evaluation — 2024-01-01..2024-03-29 (61 trading days)
     AAPL   CR = +4.2%
     GOOGL  CR = +9.1%
     AMZN   CR = +12.7%
@@ -67,9 +67,10 @@ future contributor can gauge the rate of progress.
   codebase, and Exa's search API supports `start_published_date`/`end_published_date`.
   Evidence: `pyproject.toml` lists `exa-py>=2.13.0`; a repository-wide grep finds no import of it. Exa's `/search` documents published-date filters for the `news` category and for uncategorized searches.
 - Observation: 2024-03-29 is Good Friday, when US markets are closed, so the real
-  last trading day in the window is 2024-03-28. The README cites 61 trading days; the
-  actual NYSE count for 2024-01-02..2024-03-28 is ~60.
-  Evidence: to be reconfirmed by counting rows in the built `prices` table; logged here so the discrepancy is expected rather than alarming.
+  last trading day in the window is 2024-03-28. The window nonetheless holds exactly
+  **61 trading days** (2024-01-02 .. 2024-03-28), matching the README's "61 transaction
+  days".
+  Evidence: `uv run python -c "import yfinance as yf; print(len(yf.download('AAPL', start='2024-01-01', end='2024-03-30', progress=False, auto_adjust=False)))"` returns `61`; first row 2024-01-02, last 2024-03-28, and 2024-03-29 is absent (holiday).
 
 Add new observations here as they arise, with a short evidence snippet (test output
 is ideal).
@@ -97,7 +98,7 @@ is ideal).
 - Decision: Use a record/replay design — a one-time dataset build, then offline
   evaluation runs that read recorded tool outputs.
   Rationale: The README mandates a prepared dataset because several sources cannot be
-  queried historically; record/replay also makes the 3-stock × ~60-day evaluation
+  queried historically; record/replay also makes the 3-stock × 61-day evaluation
   deterministic and cheap to re-run (only language-model calls remain live).
   Date/Author: 2026-06-11 / Claude
 
@@ -116,15 +117,46 @@ is ideal).
   realized-return math can read recorded prices without touching the crew.
   Date/Author: 2026-06-11 / Claude
 
+- Decision: Implement the offline, no-API-key pieces first (settings, `EvalDataset`,
+  the backtest simulator, `eval_tools`, and their unit tests) as Milestone 1, before
+  the Exa sources / builder / runner that need credentials and live calls.
+  Rationale: This delivers a deterministic, fully testable core that can be committed
+  and reviewed independently, and de-risks the README backtest math before any
+  expensive language-model or network work.
+  Date/Author: 2026-06-11 / Claude
+
 Record every further decision here, with the reasoning, as the plan evolves.
 
 
 ## Outcomes & Retrospective
 
-To be written at the first milestone completion and at full completion. It must
-summarize what was achieved, what remains, the measured CR per stock compared to the
-paper's Table 1, and lessons learned. Until then this section is intentionally a
-placeholder.
+Milestone 1 — Offline foundation (2026-06-11). Delivered the deterministic, no-API-key
+core of the evaluation and verified it end-to-end:
+
+- `EvaluationSettings` added to `src/trading_agents/config/settings.py`, wired into
+  `AppSettings` as `evaluation`, and exported from `config/__init__.py`.
+- `src/trading_agents/evaluation/dataset.py` — `EvalDataset` over DuckDB with the
+  `tool_outputs` and `prices` tables, idempotent `INSERT OR REPLACE` upserts, a loud
+  `KeyError` when a recorded row is missing, and `transaction_days()` /
+  `close_series()` readers.
+- `src/trading_agents/evaluation/backtest.py` — pure `simulate_position` and
+  `cumulative_return` implementing the README rules (average-cost accounting, forced
+  final Sell, `V_start = max(first-Buy close, first-Overweight close / weight_over)`,
+  else 1).
+- `src/trading_agents/evaluation/eval_tools.py` — `DatasetBackedTool` and
+  `build_dataset_tools` (the analyst-crew injection seam that consumes them is still
+  pending).
+- Tests `tests/test_eval_backtest.py` (10) and `tests/test_eval_dataset.py` (7) pass;
+  the full suite is **113 passed** with no regressions.
+
+What remains: the Exa historical sources (`exa_sources.py`), the analyst-crew
+evaluation seam, the `build-eval-dataset` and `run-eval` entry points, building the
+committed `data/eval_dataset.duckdb`, and the full evaluation that produces CR per stock
+(to be compared with the paper's Table 1 and recorded here). Building the dataset
+requires an `EXA_API_KEY`.
+
+Lessons so far: the README's "61 transaction days" is exactly right (verified against
+yfinance) — the earlier "~60 / Good Friday discrepancy" worry was unfounded.
 
 
 ## Context and Orientation
@@ -415,22 +447,23 @@ Representative builder summary (illustrative):
 
     Built data/eval_dataset.duckdb
     tickers: AAPL, GOOGL, AMZN | benchmark: SPY
-    trading days in window: 60 (2024-01-02 .. 2024-03-28)
-    tool_outputs rows: 1800 | prices rows: 352
+    trading days in window: 61 (2024-01-02 .. 2024-03-28)
+    tool_outputs rows: 1830 | prices rows: 352
     note: 2024-03-29 is Good Friday (market closed); last trading day is 2024-03-28
 
 Representative evaluation report (illustrative):
 
-    TradingAgents evaluation — 2024-01-01..2024-03-29 (60 trading days)
-    weight_over=0.5 weight_under=0.5 | language-model calls: 180 flow runs
+    TradingAgents evaluation — 2024-01-01..2024-03-29 (61 trading days)
+    weight_over=0.5 weight_under=0.5 | language-model calls: 183 flow runs
     AAPL   first Buy 2024-01-09 @ 185.14 | V_start=185.14 | CR = +4.2%
     GOOGL  first Overweight 2024-01-11 @ 142.30 | V_start=284.60 | CR = +9.1%
     AMZN   first Buy 2024-01-05 @ 145.24 | V_start=145.24 | CR = +12.7%
 
 Known limitations to keep in mind: fundamentals are best-effort current snapshots, not
-point-in-time; the trading-day count is governed by the actual price calendar, not the
-README's "61"; and the full run is language-model-expensive, which is why `--limit-days`
-exists.
+point-in-time; the trading-day count is derived from the actual price calendar and
+equals the README's 61 (2024-01-02 .. 2024-03-28, with 2024-03-29 a closed holiday);
+and the full run is language-model-expensive (3 × 61 = 183 flow runs), which is why
+`--limit-days` exists.
 
 
 ## Interfaces and Dependencies
