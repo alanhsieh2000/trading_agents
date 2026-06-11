@@ -9,3 +9,4 @@ output/
 .codex
 pre-claude.sh
 pre-codex.sh
+.claude
