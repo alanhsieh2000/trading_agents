@@ -40,7 +40,7 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 ## Progress
 
 - [x] (2026-06-11) Added `EvaluationSettings` to `src/trading_agents/config/settings.py`, wired it into `AppSettings`, and exported it from `config/__init__.py`.
-- [ ] (pending) Add `exa-py` usage and an `EXA_API_KEY` requirement; create `src/trading_agents/evaluation/exa_sources.py`.
+- [x] (2026-06-12 05:55Z) Added `exa-py` usage and an `EXA_API_KEY` requirement; created `src/trading_agents/evaluation/exa_sources.py` with historical news, global-news, Reddit, and StockTwits helpers plus unit tests.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/dataset.py` (DuckDB-backed `EvalDataset`, `tool_outputs` + `prices` tables, idempotent upserts).
 - [ ] (pending) Create `src/trading_agents/evaluation/build_dataset.py` and the `build-eval-dataset` entry point.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/eval_tools.py` (dataset-backed `DatasetBackedTool` + `build_dataset_tools`). Remaining: the analyst-crew tool-injection seam.
@@ -66,6 +66,9 @@ future contributor can gauge the rate of progress.
 - Observation: `exa-py` is already a declared dependency but is unused in the
   codebase, and Exa's search API supports `start_published_date`/`end_published_date`.
   Evidence: `pyproject.toml` lists `exa-py>=2.13.0`; a repository-wide grep finds no import of it. Exa's `/search` documents published-date filters for the `news` category and for uncategorized searches.
+- Observation: The installed `exa-py` API surface directly supports the evaluation
+  source helpers without a wrapper dependency.
+  Evidence: `uv run python -c "import inspect; from exa_py import Exa; print(inspect.signature(Exa.search))"` shows `start_published_date`, `end_published_date`, `include_domains`, `category`, and `num_results` keyword parameters. The unit tests monkeypatch `Exa.search` and verify the news, Reddit, and StockTwits helpers pass those arguments.
 - Observation: 2024-03-29 is Good Friday, when US markets are closed, so the real
   last trading day in the window is 2024-03-28. The window nonetheless holds exactly
   **61 trading days** (2024-01-02 .. 2024-03-28), matching the README's "61 transaction
@@ -149,14 +152,29 @@ core of the evaluation and verified it end-to-end:
 - Tests `tests/test_eval_backtest.py` (10) and `tests/test_eval_dataset.py` (7) pass;
   the full suite is **113 passed** with no regressions.
 
-What remains: the Exa historical sources (`exa_sources.py`), the analyst-crew
-evaluation seam, the `build-eval-dataset` and `run-eval` entry points, building the
-committed `data/eval_dataset.duckdb`, and the full evaluation that produces CR per stock
-(to be compared with the paper's Table 1 and recorded here). Building the dataset
-requires an `EXA_API_KEY`.
+What remains from the original evaluation plan: the analyst-crew evaluation seam, the
+`build-eval-dataset` and `run-eval` entry points, building the committed
+`data/eval_dataset.duckdb`, and the full evaluation that produces CR per stock (to be
+compared with the paper's Table 1 and recorded here). Building the dataset requires an
+`EXA_API_KEY`.
 
 Lessons so far: the README's "61 transaction days" is exactly right (verified against
 yfinance) — the earlier "~60 / Good Friday discrepancy" worry was unfounded.
+
+Milestone 2 — Exa source layer (2026-06-12 05:55Z). Delivered the historical
+news/social source helpers that the dataset builder will call:
+
+- `src/trading_agents/evaluation/exa_sources.py` loads `.env`, requires `EXA_API_KEY`,
+  constructs an `exa_py.Exa` client, and exposes helpers for ticker news, global market
+  news, Reddit, and StockTwits.
+- The helpers use Exa published-date filters, render news via the existing
+  `_format_news_block` style, and return the existing sentiment fallback strings when no
+  historical social results are found.
+- Tests `tests/test_eval_exa_sources.py` (6) pass with mocked Exa calls; the focused
+  evaluation suite is now **23 passed** across Exa sources, dataset, and backtest.
+
+What remains after this milestone: create `build_dataset.py` and the
+`build-eval-dataset` entry point so these Exa helpers can populate the DuckDB dataset.
 
 
 ## Context and Orientation
