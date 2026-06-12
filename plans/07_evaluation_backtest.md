@@ -42,7 +42,9 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [x] (2026-06-11) Added `EvaluationSettings` to `src/trading_agents/config/settings.py`, wired it into `AppSettings`, and exported it from `config/__init__.py`.
 - [x] (2026-06-12 05:55Z) Added `exa-py` usage and an `EXA_API_KEY` requirement; created `src/trading_agents/evaluation/exa_sources.py` with historical news, global-news, Reddit, and StockTwits helpers plus unit tests.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/dataset.py` (DuckDB-backed `EvalDataset`, `tool_outputs` + `prices` tables, idempotent upserts).
-- [ ] (pending) Create `src/trading_agents/evaluation/build_dataset.py` and the `build-eval-dataset` entry point.
+- [ ] (pending) Create the `build-eval-dataset` entry point with an early historical-source availability gate in `src/trading_agents/evaluation/build_dataset.py`; the gate must run before DuckDB writes and fail fast if required Exa sources are unavailable for the configured period.
+- [ ] (pending) Implement the DuckDB dataset build phase in `build_dataset.py` after the availability gate passes: prices, market data, indicators, Exa news/global news/Reddit/StockTwits, and fundamentals/statement tool outputs.
+- [ ] (pending) If the availability gate fails for the configured 2024-Q1 evaluation, scan candidate replacement periods and record findings before building any dataset.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/eval_tools.py` (dataset-backed `DatasetBackedTool` + `build_dataset_tools`). Remaining: the analyst-crew tool-injection seam.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/backtest.py` (`simulate_position` + `cumulative_return`).
 - [ ] (pending) Create `src/trading_agents/evaluation/run_eval.py` and the `run-eval` entry point.
@@ -69,6 +71,10 @@ future contributor can gauge the rate of progress.
 - Observation: The installed `exa-py` API surface directly supports the evaluation
   source helpers without a wrapper dependency.
   Evidence: `uv run python -c "import inspect; from exa_py import Exa; print(inspect.signature(Exa.search))"` shows `start_published_date`, `end_published_date`, `include_domains`, `category`, and `num_results` keyword parameters. The unit tests monkeypatch `Exa.search` and verify the news, Reddit, and StockTwits helpers pass those arguments.
+- Observation: A live Exa probe for the earliest buffer window found ticker news,
+  global news, and StockTwits data for 2023-12-01 through 2023-12-10, but no Reddit
+  data for AAPL, GOOGL, or AMZN.
+  Evidence: `uv run python - <<'PY' ... Exa.search(... start_published_date='2023-12-01', end_published_date='2023-12-10' ...) ... PY` returned 3 results each for AAPL/GOOGL/AMZN news, 3 for global news, and 3 each for StockTwits, while AAPL/GOOGL/AMZN Reddit domain searches returned 0. Follow-up Reddit-only probes for 2024-01-02..2024-01-12, 2024-03-18..2024-03-28, and undated Reddit searches also returned 0, so Reddit is the likely data-availability blocker.
 - Observation: 2024-03-29 is Good Friday, when US markets are closed, so the real
   last trading day in the window is 2024-03-28. The window nonetheless holds exactly
   **61 trading days** (2024-01-02 .. 2024-03-28), matching the README's "61 transaction
@@ -128,6 +134,15 @@ is ideal).
   expensive language-model or network work.
   Date/Author: 2026-06-11 / Claude
 
+- Decision: Treat historical Reddit data as required for the prepared evaluation
+  dataset and make source availability verification the first phase of
+  `build-eval-dataset`.
+  Rationale: The README evaluation lists Reddit among the analyst data sources, and the
+  user confirmed that missing Reddit should not be silently accepted. A live Exa probe
+  found no Reddit results for the earliest buffer window or sampled Q1 windows, so the
+  builder must fail before DuckDB writes if required sources are unavailable.
+  Date/Author: 2026-06-12 / Codex (confirmed with the user)
+
 Record every further decision here, with the reasoning, as the plan evolves.
 
 
@@ -175,6 +190,14 @@ news/social source helpers that the dataset builder will call:
 
 What remains after this milestone: create `build_dataset.py` and the
 `build-eval-dataset` entry point so these Exa helpers can populate the DuckDB dataset.
+
+Milestone 3 — Source availability gate (planned next). The next implementation must
+make `build-eval-dataset` verify historical source availability before creating or
+updating the DuckDB dataset. The gate checks the earliest risky buffer window first
+(currently 2023-12-01 through 2023-12-10) for ticker news, global news, Reddit, and
+StockTwits. If any required source is unavailable, especially Reddit, the command exits
+nonzero with a compact source-by-source report and leaves the dataset untouched. Only
+after this gate passes should the builder download prices and record tool outputs.
 
 
 ## Context and Orientation
@@ -251,6 +274,11 @@ Audited against the backtest window, queried from 2026:
 - Prices and indicators are fully available historically (`yf.download(start, end)`), so the builder can record them by calling the existing `get_stock_data_text` / `get_indicators_text`.
 - Financial statements return real filings but yfinance keeps only ~4 recent periods, so some 2023-2024 quarters may have rolled off; `get_fundamentals` (`.info`) is a current snapshot, not point-in-time. The builder records best-effort current values; SEC EDGAR is noted as a future point-in-time upgrade. This is acceptable because the profile and statement fields are slow-moving context, and the dominant CR drivers are price action and the daily decisions.
 - News (`get_news`, `get_global_news`) and social posts (Reddit, StockTwits) are **not** historically queryable through the existing tools, so the builder sources them from **Exa** with published-date filters.
+- Reddit is a required source for this evaluation, not an optional enhancement. A live
+  Exa probe on 2026-06-12 found no Reddit results for the earliest buffer window
+  (2023-12-01..2023-12-10) and sampled 2024-Q1 windows. The next implementation must
+  verify source availability before writing data and stop early if Reddit or another
+  required source is missing.
 
 
 ## Plan of Work
@@ -297,16 +325,30 @@ Provide idempotent upsert helpers `put_tool_output(...)` and `put_prices(symbol,
 used by the builder (use `INSERT OR REPLACE`).
 
 Fourth, add the builder `src/trading_agents/evaluation/build_dataset.py` with a
-`build-eval-dataset` console entry point. It (1) downloads daily closes for each ticker
-and the benchmark over `buffer_start_date … end_date + price_tail_days` and fills
-`prices`; (2) derives the trading-day list from the benchmark price index within the
-window; (3) for each ticker × trading day, records into `tool_outputs` the text from
+`build-eval-dataset` console entry point, but split it into two explicit phases. Phase 1
+is source availability verification and always runs before any DuckDB writes. It checks
+the earliest risky source window first: `buffer_start_date` through nine calendar days
+later (currently 2023-12-01 through 2023-12-10). For each ticker, call the Exa helpers
+for ticker news, Reddit, and StockTwits with a tiny limit such as 3, and call global
+news once for the same window. Treat fallback strings such as
+`No data available for Reddit posts for AAPL.` or `No news found ...` as unavailable.
+Because Reddit is required, missing Reddit must fail the command. On failure, print a
+compact source-by-source report and exit nonzero before opening or creating the DuckDB
+dataset.
+
+Phase 2 runs only after the availability gate passes. It downloads daily closes for
+each ticker and the benchmark over `buffer_start_date … end_date + price_tail_days` and
+fills `prices`; derives the trading-day list from the benchmark price index within the
+window; and for each ticker × trading day, records into `tool_outputs` the text from
 `get_stock_data_text`/`get_indicators_text` (called with the same
 `start = trade_date − lookback_days`, `end = trade_date` the eval flow uses), the Exa
 news and global-news blocks, the Exa Reddit and StockTwits blocks, and best-effort
-fundamentals/statement text; (4) upserts idempotently. Support `--tickers` and
-`--limit-days` for partial builds. Print a one-line summary (rows written, trading-day
-count) so the Good-Friday discrepancy is visible.
+fundamentals/statement text. Use `EvalDataset.put_prices()` and `put_tool_output()` so
+the build is idempotent. Support `--tickers`, `--limit-days`, `--verify-only`, and
+`--scan-periods`. `--verify-only` runs Phase 1 and exits without creating the dataset.
+`--scan-periods` checks candidate 61-trading-day windows, such as later 2024 quarters
+and 2025-Q1, and reports whether every required source is available; it must not change
+`EvaluationSettings.start_date` or `end_date`.
 
 Fifth, add evaluation tools and the analyst-crew seam. In
 `src/trading_agents/evaluation/eval_tools.py`, define dataset-backed `BaseTool`
@@ -391,7 +433,26 @@ Run all commands from `/app/trading_agents`.
    rows through a temporary DuckDB file and confirm a dataset-backed eval tool returns the
    recorded payload.
 
-4. Build a small dataset slice (needs `EXA_API_KEY` and network for prices/news):
+4. Before building any dataset, verify historical source availability (needs
+   `EXA_API_KEY` and network):
+
+       uv run build-eval-dataset --verify-only
+
+   Expected if every required source is available: a source-by-source report showing
+   `available` for ticker news, global news, Reddit, and StockTwits for the earliest
+   risky buffer window, followed by a zero exit code and no DuckDB file creation.
+
+   Expected if Reddit remains unavailable: a nonzero exit with a report naming the
+   missing Reddit rows, for example `AAPL reddit unavailable for 2023-12-01..2023-12-10`.
+   In this case, stop and do not run the dataset build. Use the scan command below to
+   search for a viable replacement period:
+
+       uv run build-eval-dataset --scan-periods
+
+   Expected scan behavior: print candidate windows and whether all required sources are
+   available. Do not update settings or write the dataset automatically.
+
+5. Build a small dataset slice only after `--verify-only` passes:
 
        uv run build-eval-dataset --tickers AAPL --limit-days 3
 
@@ -401,7 +462,7 @@ Run all commands from `/app/trading_agents`.
 
        uv run python -c "from trading_agents.evaluation.dataset import EvalDataset; d=EvalDataset(); print(len(d.transaction_days()), 'days'); print(d.tool_output('get_stock_data','AAPL',d.transaction_days()[0])[:120])"
 
-5. Run an offline evaluation smoke run over the slice (needs `OPENAI_API_KEY`; no other
+6. Run an offline evaluation smoke run over the slice (needs `OPENAI_API_KEY`; no other
    network):
 
        uv run run-eval --tickers AAPL --limit-days 3
@@ -410,7 +471,7 @@ Run all commands from `/app/trading_agents`.
    AAPL and a CR value. No live calls should be made to yfinance/Reddit/StockTwits — the
    analyst tools and the pre-fetched sentiment blocks read from the dataset.
 
-6. Build the full dataset and run the full evaluation (language-model-expensive):
+7. Build the full dataset and run the full evaluation (language-model-expensive):
 
        uv run build-eval-dataset
        uv run run-eval
@@ -418,7 +479,7 @@ Run all commands from `/app/trading_agents`.
    Expected: a report giving CR for AAPL, GOOGL, and AMZN over the window. Record the
    numbers in `Outcomes & Retrospective` and compare them qualitatively to Table 1.
 
-7. Commit the dataset and code:
+8. Commit the dataset and code:
 
        git add data/eval_dataset.duckdb src/trading_agents/evaluation tests/test_eval_*.py
        git commit
@@ -430,9 +491,16 @@ Acceptance is behavioral:
 
 - `uv run pytest tests/test_eval_backtest.py tests/test_eval_dataset.py` passes; the new
   tests fail on a clean checkout before this plan and pass after.
+- `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py`
+  passes after the builder is added. The builder tests must mock Exa/yfinance and assert
+  that verification failure prevents dataset writes.
+- `uv run build-eval-dataset --verify-only` performs the required-source check before
+  any DuckDB writes. If Reddit or another required source is unavailable, the command
+  exits nonzero with a clear report and does not create or update
+  `data/eval_dataset.duckdb`.
 - `uv run build-eval-dataset --tickers AAPL --limit-days 3` produces a DuckDB file with
-  the expected `tool_outputs` and `prices` rows, and is idempotent (running it twice does
-  not duplicate rows).
+  the expected `tool_outputs` and `prices` rows only after source verification passes,
+  and is idempotent (running it twice does not duplicate rows).
 - `uv run run-eval --tickers AAPL --limit-days 3` produces a per-day rating list and a CR
   value while reading only from the dataset for analyst data (verifiable by running with
   network disabled, or by asserting in a test that the dataset-backed tools were used).
@@ -447,21 +515,35 @@ position is ever taken) as a percentage.
 
 ## Idempotence and Recovery
 
-The dataset build uses `INSERT OR REPLACE`, so it can be run repeatedly and partially
-(via `--tickers`/`--limit-days`) without duplicating rows; rerunning refreshes existing
-rows. The evaluation run writes only under `output/eval/` and uses an isolated lessons
-directory there, so it never disturbs ordinary `output/<ticker>_<date>/` run artifacts;
-delete `output/eval/` to start a clean evaluation. If the build is interrupted, rerun it
-— completed (ticker, day) rows are simply overwritten. If `EXA_API_KEY` is missing, the
-builder must fail with a clear message before doing partial work for the news/social
-tools. If a needed `tool_outputs` row is missing at evaluation time, `EvalDataset.tool_output`
-raises a clear error naming the tool/ticker/date so the gap is obvious rather than masked
-by empty input.
+The availability gate runs before any DuckDB connection is opened for writing. If
+`EXA_API_KEY` is missing, or if ticker news, global news, Reddit, or StockTwits is
+unavailable for the required probe window, the builder fails with a clear report and
+leaves the dataset untouched. `--verify-only` and `--scan-periods` are read-only with
+respect to `data/eval_dataset.duckdb`.
+
+After the gate passes, the dataset build uses `INSERT OR REPLACE`, so it can be run
+repeatedly and partially (via `--tickers`/`--limit-days`) without duplicating rows;
+rerunning refreshes existing rows. The evaluation run writes only under `output/eval/`
+and uses an isolated lessons directory there, so it never disturbs ordinary
+`output/<ticker>_<date>/` run artifacts; delete `output/eval/` to start a clean
+evaluation. If the build is interrupted after the gate passes, rerun it — completed
+(ticker, day) rows are simply overwritten. If a needed `tool_outputs` row is missing at
+evaluation time, `EvalDataset.tool_output` raises a clear error naming the
+tool/ticker/date so the gap is obvious rather than masked by empty input.
 
 
 ## Artifacts and Notes
 
 Representative builder summary (illustrative):
+
+    Source availability check — 2023-12-01..2023-12-10
+    AAPL  news available | reddit unavailable | stocktwits available
+    GOOGL news available | reddit unavailable | stocktwits available
+    AMZN  news available | reddit unavailable | stocktwits available
+    global_news available
+    ERROR: required source unavailable; dataset was not written
+
+Representative successful builder summary (illustrative):
 
     Built data/eval_dataset.duckdb
     tickers: AAPL, GOOGL, AMZN | benchmark: SPY
@@ -480,8 +562,8 @@ Representative evaluation report (illustrative):
 Known limitations to keep in mind: fundamentals are best-effort current snapshots, not
 point-in-time; the trading-day count is derived from the actual price calendar and
 equals the README's 61 (2024-01-02 .. 2024-03-28, with 2024-03-29 a closed holiday);
-and the full run is language-model-expensive (3 × 61 = 183 flow runs), which is why
-`--limit-days` exists.
+Reddit is currently the likely historical-source blocker; and the full run is
+language-model-expensive (3 × 61 = 183 flow runs), which is why `--limit-days` exists.
 
 
 ## Interfaces and Dependencies
@@ -533,6 +615,18 @@ In `src/trading_agents/evaluation/exa_sources.py`:
 In `src/trading_agents/evaluation/build_dataset.py` and `run_eval.py`, a `main()` each,
 registered as `build-eval-dataset` and `run-eval` in `pyproject.toml`.
 
+In `src/trading_agents/evaluation/build_dataset.py`, define builder helpers with these
+observable behaviors:
+
+    def main(argv: list[str] | None = None) -> int: ...
+    def verify_source_availability(tickers: list[str]) -> "AvailabilityReport": ...
+    def build_dataset(tickers: list[str], limit_days: int | None = None) -> "BuildSummary": ...
+
+`main()` parses `--verify-only`, `--tickers`, `--limit-days`, and `--scan-periods`.
+`verify_source_availability()` must return enough structured data for tests to assert
+which source failed, and `main()` must return a nonzero exit code when any required
+source is unavailable. `build_dataset()` must be called only after verification passes.
+
 The analyst crew (`src/trading_agents/crews/analyst_crew/analyst_crew.py`) must keep its
 existing public functions `run_analyst_stage`, `prepare_analyst_inputs`, and
 `extract_analyst_reports` working unchanged when evaluation mode is off, while gaining an
@@ -550,3 +644,11 @@ Revision Note: 2026-06-11 Renumbered this evaluation ExecPlan from 08 to 07 (and
 end-to-end-flow ExecPlan from 07 to 08, renamed `plans/08_end_to_end_flow.md`) at the
 user's request, so the next-to-implement work carries the active plan number. All
 cross-references between the two files were updated accordingly.
+
+Revision Note: 2026-06-12 Split the pending dataset-builder task into a source
+availability gate, the actual DuckDB build phase, and a candidate-period scan fallback.
+This revision was made after the user raised historical availability as a major concern
+and confirmed that Reddit is required. A live Exa probe found early-window news,
+global-news, and StockTwits results but no Reddit results, so the plan now requires
+`build-eval-dataset --verify-only` to fail before DuckDB writes when any required source
+is unavailable.
