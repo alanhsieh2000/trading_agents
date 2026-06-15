@@ -65,6 +65,16 @@ future contributor can gauge the rate of progress.
   Evidence: `src/trading_agents/tools/news.py` builds `items = list(getattr(yf.Ticker(clean_query), "news", None) or [])` and then filters by date; there is no historical query. Confirmed against the yfinance docs and issue tracker.
 - Observation: Reddit and StockTwits fetchers are recent-only.
   Evidence: `src/trading_agents/tools/sentiment.py` queries `reddit.com/r/{sub}/search.json?...&t=week` and StockTwits `streams/symbol/{symbol}.json`, and filters Reddit posts against `now - recency_window_seconds`. Neither endpoint accepts a historical range.
+- Observation: The current live `fetch_reddit_posts` tool can mask Reddit API
+  blocking as ordinary missing data.
+  Evidence: On 2026-06-15, the underlying endpoint
+  `https://www.reddit.com/r/wallstreetbets/search.json?q=AAPL&restrict_sr=on&sort=new&t=week&limit=5`
+  returned `HTTPError 403 Blocked` in this environment, while
+  `fetch_reddit_posts("AAPL", subreddits=("wallstreetbets",), ...)` returned
+  `No data available for Reddit posts for AAPL.` because `_fetch_subreddit_posts()`
+  exceptions are caught and converted to an empty post list. Therefore, the current
+  fallback string does not distinguish true zero results from blocked or failed
+  Reddit access.
 - Observation: `exa-py` is already a declared dependency but is unused in the
   codebase, and Exa's search API supports `start_published_date`/`end_published_date`.
   Evidence: `pyproject.toml` lists `exa-py>=2.13.0`; a repository-wide grep finds no import of it. Exa's `/search` documents published-date filters for the `news` category and for uncategorized searches.
@@ -142,6 +152,15 @@ is ideal).
   found no Reddit results for the earliest buffer window or sampled Q1 windows, so the
   builder must fail before DuckDB writes if required sources are unavailable.
   Date/Author: 2026-06-12 / Codex (confirmed with the user)
+
+- Decision: The evaluation dataset builder must record Reddit probe status separately
+  from Reddit result count.
+  Rationale: `No data available for Reddit posts ...` is ambiguous in the current live
+  tool: it can mean zero matching posts, HTTP 403 blocking, timeout, JSON parse
+  failure, or another network error. Plan 07's availability gate needs structured
+  statuses such as `ok`, `empty`, `blocked`, `timeout`, and `parse_error` so it fails
+  for source access problems instead of misclassifying them as empty data.
+  Date/Author: 2026-06-15 / Codex
 
 Record every further decision here, with the reasoning, as the plan evolves.
 
