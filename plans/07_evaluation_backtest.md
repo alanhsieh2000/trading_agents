@@ -75,6 +75,15 @@ future contributor can gauge the rate of progress.
   exceptions are caught and converted to an empty post list. Therefore, the current
   fallback string does not distinguish true zero results from blocked or failed
   Reddit access.
+- Observation: The original TradingAgents repository works around Reddit JSON
+  blocking by using Reddit RSS/Atom search first.
+  Evidence: `https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/dataflows/reddit.py`
+  documents that `/search.json` is WAF-blocked for public clients and fetches
+  `/search.rss` by default. A local probe on 2026-06-15 for
+  `https://www.reddit.com/r/wallstreetbets/search.rss?q=AAPL&restrict_sr=on&sort=new&t=week&limit=5`
+  returned HTTP 200 with two Atom entries dated 2026-06-10 and 2026-06-09. This is
+  useful for fixing live Reddit fetching, but it still does not provide exact
+  historical date-range access for the 2024-Q1 backtest.
 - Observation: `exa-py` is already a declared dependency but is unused in the
   codebase, and Exa's search API supports `start_published_date`/`end_published_date`.
   Evidence: `pyproject.toml` lists `exa-py>=2.13.0`; a repository-wide grep finds no import of it. Exa's `/search` documents published-date filters for the `news` category and for uncategorized searches.
@@ -160,6 +169,15 @@ is ideal).
   failure, or another network error. Plan 07's availability gate needs structured
   statuses such as `ok`, `empty`, `blocked`, `timeout`, and `parse_error` so it fails
   for source access problems instead of misclassifying them as empty data.
+  Date/Author: 2026-06-15 / Codex
+
+- Decision: Track the RSS-first live Reddit fix in Plan 01, but keep Plan 07's
+  historical Reddit requirement separate.
+  Rationale: RSS-first fetching should repair the current live `fetch_reddit_posts`
+  behavior and can make recent Reddit diagnostics more trustworthy. It does not
+  replace the Plan 07 requirement for historical, date-bounded Reddit data, so the
+  evaluation builder must still use Exa or another historical provider plus structured
+  availability statuses.
   Date/Author: 2026-06-15 / Codex
 
 Record every further decision here, with the reasoning, as the plan evolves.
