@@ -38,6 +38,14 @@ This plan deliberately starts with installation and tools because every downstre
   Evidence: The error was `bwrap: No permissions to create a new namespace`. The file changes were applied with a one-off Python writer because patching could not run, and `uv sync` succeeded after escalation.
 - Observation: `stockstats.StockDataFrame` keeps the date as the index during indicator column selection, so the implementation must convert back to a plain pandas `DataFrame` before formatting output.
   Evidence: The first test run failed in `test_indicators_format_requested_values` with `UserWarning: Invalid number of return arguments after parsing column name: 'date'`. Converting with `pd.DataFrame(...).reset_index()` fixed the issue and the suite passed.
+- Observation: The original TradingAgents Reddit implementation no longer relies on
+  Reddit's public `/search.json` endpoint as the default path.
+  Evidence: `https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/dataflows/reddit.py`
+  documents that `/search.json` is WAF-blocked for public clients and uses
+  `/search.rss` first. A local probe on 2026-06-15 for
+  `https://www.reddit.com/r/wallstreetbets/search.rss?q=AAPL&restrict_sr=on&sort=new&t=week&limit=5`
+  returned HTTP 200 with two Atom entries, while the equivalent `.json` endpoint
+  returned HTTP 403 in the same environment.
 
 ## Decision Log
 
@@ -62,6 +70,14 @@ This plan deliberately starts with installation and tools because every downstre
 - Decision: Keep sentiment prefetching as plain functions, not CrewAI tools.
   Rationale: The original TradingAgents sentiment flow prefetches StockTwits and Reddit context into prompts rather than exposing those calls as tools. Later analyst crews can inject these strings directly.
   Date/Author: 2026-05-23 / Codex
+- Decision: Fix the live Reddit sentiment helper with an RSS-first implementation.
+  Rationale: The current helper still calls Reddit `/search.json`, which can be
+  blocked with HTTP 403 and then masked as `No data available`. The original
+  TradingAgents implementation uses `/search.rss` first and treats JSON as a future
+  OAuth-capable fallback. The local port should follow that pattern, omit score and
+  comment counts for RSS results rather than fabricating them, and preserve the
+  existing plain-string prompt contract.
+  Date/Author: 2026-06-15 / Codex
 
 ## Outcomes & Retrospective
 
@@ -70,6 +86,11 @@ This plan is implemented. The project now installs as `trading-agents`, imports 
 The main code outcome is a focused tool package under `src/trading_agents/tools/`. Market data tools return compact CSV-like price and indicator evidence. Fundamentals tools return company profile fields and compact financial statement CSV. News tools return headline summaries and explicit source limitations for global market news. Sentiment helpers return formatted StockTwits and Reddit snippets or clear `No data available` messages when upstream data is absent.
 
 The main remaining architectural gap is that these tools are not yet wired into analyst crews. That is intentionally left for the analyst-crew plan because this foundation plan only establishes installability, tool names, and deterministic tool behavior.
+
+Post-implementation follow-up: update `src/trading_agents/tools/sentiment.py` so
+`fetch_reddit_posts` uses Reddit RSS/Atom search first, matching the original
+TradingAgents implementation. This is a live-tool reliability fix, not a historical
+backtest-data solution.
 
 ## Context and Orientation
 
