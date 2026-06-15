@@ -1,7 +1,11 @@
+import html
 import json
+import re
 import time
 from collections.abc import Iterable
+from datetime import datetime
 from typing import Any
+import xml.etree.ElementTree as ET
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
@@ -11,6 +15,10 @@ from trading_agents.config import get_settings
 
 REDDIT_HEADERS = {
     "User-Agent": "tradingagents/0.2 (+https://github.com/TauricResearch/TradingAgents)",
+    "Accept": "application/atom+xml, application/rss+xml, text/xml, */*",
+}
+REDDIT_JSON_HEADERS = {
+    "User-Agent": "tradingagents/0.2 (+https://github.com/TauricResearch/TradingAgents)",
     "Accept": "application/json",
 }
 STOCKTWITS_HEADERS = {
@@ -18,6 +26,7 @@ STOCKTWITS_HEADERS = {
     "Accept": "application/json",
 }
 SECONDS_PER_WEEK = 7 * 24 * 60 * 60
+ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 
 
 def fetch_stocktwits_messages(
@@ -120,16 +129,25 @@ def fetch_reddit_posts(
             blocks.append(f"r/{subreddit}: ")
             continue
 
-        lines = [f"r/{subreddit} — {len(posts)} recent posts mentioning {clean_query.upper()}:"]
+        via_rss = any(post.get("source") == "rss" for post in posts)
+        header = f"r/{subreddit} — {len(posts)} recent posts mentioning {clean_query.upper()}"
+        if via_rss:
+            header += " (via RSS feed; scores/comments unavailable):"
+        else:
+            header += ":"
+        lines = [header]
         for post in posts:
             title = _one_line(post.get("title", ""))
-            score = _as_int(post.get("score"))
-            comments = _as_int(post.get("num_comments"))
+            score = post.get("score")
+            comments = post.get("num_comments")
             created = post.get("created_utc")
             created_str = time.strftime("%Y-%m-%d", time.gmtime(created)) if created else "?"
+            meta = created_str
+            if score is not None and comments is not None:
+                meta += f" · {_as_int(score):>4}↑ · {_as_int(comments):>3}c"
             selftext = _trim_text(_one_line(post.get("selftext", "")), 240)
             lines.append(
-                f" [{created_str} · {score:>4}↑ · {comments:>3}c] {title}"
+                f" [{meta}] {title}"
                 + (f"\n body excerpt: {selftext}" if selftext else "")
             )
         blocks.append("\n".join(lines))
@@ -146,6 +164,53 @@ def _fetch_subreddit_posts(
     limit: int,
     timeout: float,
 ) -> list[dict[str, Any]]:
+    """Fetch Reddit search results through RSS/Atom.
+
+    Reddit's public ``search.json`` endpoint is frequently WAF-blocked for
+    unauthenticated clients. The RSS search feed is less rich but does not
+    require an API key, so it is the default path for live sentiment context.
+    """
+    url = _subreddit_search_url("rss", query, subreddit, limit)
+    return _fetch_subreddit_rss(url, timeout=timeout, limit=max(limit, 0))
+
+
+def _fetch_subreddit_json(
+    query: str,
+    subreddit: str,
+    limit: int,
+    timeout: float,
+) -> list[dict[str, Any]]:
+    """Fetch Reddit JSON search results when the endpoint is usable.
+
+    This path carries richer score/comment metadata than RSS. It is kept for a
+    future OAuth-backed or unblocked JSON path, but it is not the default public
+    fetch because Reddit currently blocks unauthenticated ``search.json``.
+    """
+    url = _subreddit_search_url("json", query, subreddit, limit)
+    payload = _fetch_json(url, headers=REDDIT_JSON_HEADERS, timeout=timeout)
+    children = (
+        ((payload.get("data") or {}).get("children") or [])
+        if isinstance(payload, dict)
+        else []
+    )
+    posts = []
+    for child in children:
+        if not isinstance(child, dict):
+            continue
+        data = child.get("data") or {}
+        if isinstance(data, dict):
+            post = dict(data)
+            post["source"] = "json"
+            posts.append(post)
+    return posts
+
+
+def _subreddit_search_url(
+    suffix: str,
+    query: str,
+    subreddit: str,
+    limit: int,
+) -> str:
     qs = urlencode(
         {
             "q": query,
@@ -155,10 +220,53 @@ def _fetch_subreddit_posts(
             "limit": max(limit, 0),
         }
     )
-    url = f"https://www.reddit.com/r/{quote(subreddit)}/search.json?{qs}"
-    payload = _fetch_json(url, headers=REDDIT_HEADERS, timeout=timeout)
-    children = ((payload.get("data") or {}).get("children") or []) if isinstance(payload, dict) else []
-    return [child.get("data") or {} for child in children if isinstance(child, dict)]
+    return f"https://www.reddit.com/r/{quote(subreddit)}/search.{suffix}?{qs}"
+
+
+def _fetch_subreddit_rss(
+    url: str,
+    timeout: float,
+    limit: int,
+    retry: bool = True,
+) -> list[dict[str, Any]]:
+    request = Request(url, headers=REDDIT_HEADERS)
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            root = ET.fromstring(response.read())
+    except HTTPError as exc:
+        if exc.code == 429 and retry:
+            wait = _retry_after_seconds(exc) or 5.0
+            time.sleep(wait)
+            return _fetch_subreddit_rss(
+                url,
+                timeout=timeout,
+                limit=limit,
+                retry=False,
+            )
+        return []
+    except (URLError, TimeoutError, ET.ParseError):
+        return []
+
+    posts = []
+    for entry in root.findall("atom:entry", ATOM_NS)[:limit]:
+        title = entry.find("atom:title", ATOM_NS)
+        published = entry.find("atom:published", ATOM_NS)
+        content = entry.find("atom:content", ATOM_NS)
+        posts.append(
+            {
+                "title": title.text if title is not None and title.text else "",
+                "score": None,
+                "num_comments": None,
+                "created_utc": _parse_atom_timestamp(
+                    published.text if published is not None else None
+                ),
+                "selftext": _strip_reddit_html(
+                    content.text if content is not None and content.text else ""
+                ),
+                "source": "rss",
+            }
+        )
+    return posts
 
 
 def _is_quality_recent_reddit_post(
@@ -173,11 +281,46 @@ def _is_quality_recent_reddit_post(
         created_timestamp = float(created)
     except (TypeError, ValueError):
         return False
+    if not now - recency_window_seconds <= created_timestamp <= now:
+        return False
+    if post.get("source") == "rss" and (
+        post.get("score") is None or post.get("num_comments") is None
+    ):
+        return True
     return (
-        now - recency_window_seconds <= created_timestamp <= now
-        and _as_int(post.get("score")) > min_score
+        _as_int(post.get("score")) > min_score
         and _as_int(post.get("num_comments")) > min_comments
     )
+
+
+def _parse_atom_timestamp(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+        return datetime.fromisoformat(normalized).timestamp()
+    except ValueError:
+        return None
+
+
+def _strip_reddit_html(value: str) -> str:
+    if not value:
+        return ""
+    content = str(value)
+    if "<!-- SC_OFF -->" in content and "<!-- SC_ON -->" in content:
+        content = content.split("<!-- SC_OFF -->", 1)[1].split("<!-- SC_ON -->", 1)[0]
+    text = re.sub(r"<[^>]+>", " ", content)
+    return _one_line(html.unescape(text))
+
+
+def _retry_after_seconds(exc: HTTPError) -> float | None:
+    try:
+        retry_after = exc.headers.get("Retry-After") if exc.headers else None
+        if not retry_after:
+            return None
+        return min(float(retry_after), 30.0)
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 def _fetch_json(

@@ -1,4 +1,5 @@
 import pandas as pd
+from urllib.error import URLError
 
 from trading_agents.config.settings import (
     AppSettings,
@@ -336,7 +337,109 @@ def test_sentiment_helpers_degrade_when_fetch_fails(monkeypatch):
     monkeypatch.setattr(sentiment, "_fetch_json", fake_fetch)
 
     assert fetch_stocktwits_messages("AAPL") == "No data available for StockTwits messages for AAPL."
+
+
+def test_reddit_degrades_when_rss_fetch_fails(monkeypatch):
+    def fake_urlopen(*args, **kwargs):
+        raise URLError("network unavailable")
+
+    monkeypatch.setattr(sentiment, "urlopen", fake_urlopen)
+
     assert fetch_reddit_posts("AAPL", inter_request_delay=0) == "No data available for Reddit posts for AAPL."
+
+
+def test_reddit_fetches_rss_first_and_omits_unavailable_metrics(monkeypatch):
+    now = pd.Timestamp("2026-06-15 00:00:00", tz="UTC").timestamp()
+    requested_urls = []
+    atom = b"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <title>Apple and the new AI-Siri: My thesis on AAPL</title>
+    <published>2026-06-10T01:54:09+00:00</published>
+    <content type="html">&lt;div&gt;&lt;!-- SC_OFF --&gt;&lt;p&gt;Line &lt;b&gt;one&lt;/b&gt;&lt;/p&gt;&lt;!-- SC_ON --&gt;&lt;/div&gt;</content>
+  </entry>
+</feed>"""
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return atom
+
+    def fake_urlopen(request, timeout=10.0):
+        requested_urls.append(request.full_url)
+        return FakeResponse()
+
+    monkeypatch.setattr(sentiment, "urlopen", fake_urlopen)
+    monkeypatch.setattr(sentiment.time, "time", lambda: now)
+
+    result = fetch_reddit_posts(
+        "AAPL",
+        subreddits=("wallstreetbets",),
+        limit_per_sub=5,
+        inter_request_delay=0,
+    )
+
+    assert requested_urls == [
+        "https://www.reddit.com/r/wallstreetbets/search.rss?q=AAPL&restrict_sr=on&sort=new&t=week&limit=5"
+    ]
+    assert result == (
+        "r/wallstreetbets — 1 recent posts mentioning AAPL "
+        "(via RSS feed; scores/comments unavailable):\n"
+        " [2026-06-10] Apple and the new AI-Siri: My thesis on AAPL\n"
+        " body excerpt: Line one"
+    )
+
+
+def test_reddit_json_helper_preserves_rich_metadata(monkeypatch):
+    captured = {}
+
+    def fake_fetch(url, headers=None, timeout=10.0):
+        captured.update(url=url, headers=headers, timeout=timeout)
+        return {
+            "data": {
+                "children": [
+                    {
+                        "data": {
+                            "title": "AAPL earnings thread",
+                            "score": 42,
+                            "num_comments": 17,
+                            "created_utc": 1_718_000_000,
+                            "selftext": "JSON body",
+                        }
+                    }
+                ]
+            }
+        }
+
+    monkeypatch.setattr(sentiment, "_fetch_json", fake_fetch)
+
+    posts = sentiment._fetch_subreddit_json("AAPL", "wallstreetbets", 25, 1.5)
+
+    assert captured == {
+        "url": "https://www.reddit.com/r/wallstreetbets/search.json?q=AAPL&restrict_sr=on&sort=new&t=week&limit=25",
+        "headers": {
+            "User-Agent": "tradingagents/0.2 (+https://github.com/TauricResearch/TradingAgents)",
+            "Accept": "application/json",
+        },
+        "timeout": 1.5,
+    }
+    assert posts == [
+        {
+            "title": "AAPL earnings thread",
+            "score": 42,
+            "num_comments": 17,
+            "created_utc": 1_718_000_000,
+            "selftext": "JSON body",
+            "source": "json",
+        }
+    ]
 
 
 def test_sentiment_helpers_match_upstream_success_formats(monkeypatch):
@@ -367,44 +470,38 @@ def test_sentiment_helpers_match_upstream_success_formats(monkeypatch):
                     },
                 ]
             }
-        return {
-            "data": {
-                "children": [
-                    {
-                        "data": {
-                            "subreddit_name_prefixed": "r/stocks",
-                            "title": "AAPL earnings thread",
-                            "score": 8,
-                            "num_comments": 5,
-                            "created_utc": now - 60,
-                            "selftext": "Long\nanalysis " + "x" * 300,
-                        }
-                    },
-                    {
-                        "data": {
-                            "subreddit_name_prefixed": "r/stocks",
-                            "title": "Low quality AAPL thread",
-                            "score": 4,
-                            "num_comments": 5,
-                            "created_utc": now - 60,
-                            "selftext": "Should be filtered out",
-                        }
-                    },
-                    {
-                        "data": {
-                            "subreddit_name_prefixed": "r/stocks",
-                            "title": "Old AAPL thread",
-                            "score": 20,
-                            "num_comments": 15,
-                            "created_utc": now - sentiment.SECONDS_PER_WEEK - 1,
-                            "selftext": "Should also be filtered out",
-                        }
-                    },
-                ]
-            }
-        }
+        raise AssertionError("unexpected non-StockTwits fetch")
+
+    def fake_fetch_posts(query, subreddit, limit, timeout):
+        return [
+            {
+                "subreddit_name_prefixed": "r/stocks",
+                "title": "AAPL earnings thread",
+                "score": 8,
+                "num_comments": 5,
+                "created_utc": now - 60,
+                "selftext": "Long\nanalysis " + "x" * 300,
+            },
+            {
+                "subreddit_name_prefixed": "r/stocks",
+                "title": "Low quality AAPL thread",
+                "score": 4,
+                "num_comments": 5,
+                "created_utc": now - 60,
+                "selftext": "Should be filtered out",
+            },
+            {
+                "subreddit_name_prefixed": "r/stocks",
+                "title": "Old AAPL thread",
+                "score": 20,
+                "num_comments": 15,
+                "created_utc": now - sentiment.SECONDS_PER_WEEK - 1,
+                "selftext": "Should also be filtered out",
+            },
+        ]
 
     monkeypatch.setattr(sentiment, "_fetch_json", fake_fetch)
+    monkeypatch.setattr(sentiment, "_fetch_subreddit_posts", fake_fetch_posts)
     monkeypatch.setattr(sentiment.time, "time", lambda: now)
 
     stocktwits = fetch_stocktwits_messages("aapl")
