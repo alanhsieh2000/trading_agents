@@ -1,9 +1,12 @@
 from datetime import date, datetime, timezone
 
 from trading_agents.evaluation.reddit_coverage import (
+    CandidateQuarter,
+    CoverageScore,
     RedditPost,
     dedupe_posts,
     parse_reddit_atom,
+    score_candidate_quarters,
 )
 
 
@@ -55,3 +58,67 @@ def test_dedupe_posts_prefers_first_url():
     posts = parse_reddit_atom(ATOM, ticker="AAPL", subreddit="wallstreetbets")
 
     assert dedupe_posts(posts) == [posts[0]]
+
+
+def _post(ticker: str, subreddit: str, yyyy_mm_dd: str) -> RedditPost:
+    published_at = datetime.fromisoformat(yyyy_mm_dd + "T12:00:00+00:00")
+    return RedditPost(
+        ticker=ticker,
+        subreddit=subreddit,
+        title=f"{ticker} {yyyy_mm_dd}",
+        published_at=published_at,
+        published_date=published_at.date(),
+        url=f"https://reddit.example/{ticker}/{subreddit}/{yyyy_mm_dd}",
+        body="body",
+    )
+
+
+def test_score_candidate_quarters_uses_rolling_lookback_windows():
+    candidates = [
+        CandidateQuarter("2026-Q1", date(2026, 1, 1), date(2026, 1, 10)),
+        CandidateQuarter("2026-Q2", date(2026, 4, 1), date(2026, 4, 10)),
+    ]
+    trading_days = {
+        "2026-Q1": [date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7)],
+        "2026-Q2": [date(2026, 4, 5), date(2026, 4, 6), date(2026, 4, 7)],
+    }
+    posts = [
+        _post("AAPL", "wallstreetbets", "2026-01-02"),
+        _post("GOOGL", "stocks", "2026-01-06"),
+        _post("AMZN", "investing", "2026-01-07"),
+        _post("AAPL", "wallstreetbets", "2026-04-01"),
+        _post("AAPL", "stocks", "2026-04-04"),
+        _post("GOOGL", "investing", "2026-04-02"),
+        _post("AMZN", "stocks", "2026-04-03"),
+        _post("AMZN", "investing", "2026-04-06"),
+    ]
+
+    scores = score_candidate_quarters(
+        candidates,
+        posts,
+        tickers=("AAPL", "GOOGL", "AMZN"),
+        subreddits=("wallstreetbets", "stocks", "investing"),
+        trading_days_by_quarter=trading_days,
+        lookback_days=7,
+    )
+
+    assert scores == [
+        CoverageScore(
+            quarter="2026-Q2",
+            total_posts=5,
+            ticker_day_count=9,
+            covered_ticker_days_at_least_1=9,
+            covered_ticker_days_at_least_3=0,
+            min_ticker_coverage_at_least_1=1.0,
+            nonzero_ticker_subreddit_pairs=5,
+        ),
+        CoverageScore(
+            quarter="2026-Q1",
+            total_posts=3,
+            ticker_day_count=9,
+            covered_ticker_days_at_least_1=6,
+            covered_ticker_days_at_least_3=0,
+            min_ticker_coverage_at_least_1=1 / 3,
+            nonzero_ticker_subreddit_pairs=3,
+        ),
+    ]
