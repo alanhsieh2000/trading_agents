@@ -23,7 +23,7 @@
 - Create: `src/trading_agents/evaluation/reddit_coverage.py`
 - Test: `tests/test_eval_reddit_coverage.py`
 
-- [ ] **Step 1: Write failing tests for Atom parsing and deduplication**
+- [x] **Step 1: Write failing tests for Atom parsing and deduplication**
 
 Create `tests/test_eval_reddit_coverage.py` with:
 
@@ -87,7 +87,7 @@ def test_dedupe_posts_prefers_first_url():
     assert dedupe_posts(posts) == [posts[0]]
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run:
 
@@ -97,7 +97,7 @@ uv run pytest tests/test_eval_reddit_coverage.py -q
 
 Expected: import failure for missing `trading_agents.evaluation.reddit_coverage`.
 
-- [ ] **Step 3: Implement data model and parser**
+- [x] **Step 3: Implement data model and parser**
 
 Create `src/trading_agents/evaluation/reddit_coverage.py` with:
 
@@ -197,7 +197,7 @@ def _one_line(value: str) -> str:
     return " ".join(str(value).split())
 ```
 
-- [ ] **Step 4: Run parser tests to verify they pass**
+- [x] **Step 4: Run parser tests to verify they pass**
 
 Run:
 
@@ -207,7 +207,7 @@ uv run pytest tests/test_eval_reddit_coverage.py -q
 
 Expected: `2 passed`.
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
 
 ```bash
 git add src/trading_agents/evaluation/reddit_coverage.py tests/test_eval_reddit_coverage.py
