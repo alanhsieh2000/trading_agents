@@ -43,7 +43,17 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [x] (2026-06-12 05:55Z) Added `exa-py` usage and an `EXA_API_KEY` requirement; created `src/trading_agents/evaluation/exa_sources.py` with historical news, global-news, Reddit, and StockTwits helpers plus unit tests.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/dataset.py` (DuckDB-backed `EvalDataset`, `tool_outputs` + `prices` tables, idempotent upserts).
 - [ ] (pending) Create the `build-eval-dataset` entry point with an early historical-source availability gate in `src/trading_agents/evaluation/build_dataset.py`; the gate must run before DuckDB writes and fail fast if required Exa sources are unavailable for the configured period.
-- [ ] (pending) Implement the DuckDB dataset build phase in `build_dataset.py` after the availability gate passes: prices, market data, indicators, Exa news/global news/Reddit/StockTwits, and fundamentals/statement tool outputs.
+- [ ] (pending) Implement the shared price-table and trading-day calendar build in `build_dataset.py`: write close prices for the evaluation tickers and the default benchmark ticker, SPY, before recording per-tool payloads.
+- [ ] (pending) Implement dataset building for `get_stock_data`: record the market-data text block for each evaluation ticker and for SPY on each trading day using the same lookback window the analyst stage will request; SPY history is required by the portfolio manager's self-reflection and benchmark-relative realized-return calculations.
+- [ ] (pending) Implement dataset building for `get_indicators`: record the indicator text block for each ticker and trading day using the same indicator list and lookback window as the analyst stage.
+- [ ] (pending) Implement dataset building for `get_news`: record ticker-news text through the historical source layer and preserve the live tool's output shape.
+- [ ] (pending) Implement dataset building for `get_global_news`: record global-market-news text through the historical source layer for each trading day.
+- [ ] (pending) Implement dataset building for `fetch_reddit_posts`: record Reddit sentiment text with explicit handling for rate limits, blocked access, empty results, and parse failures.
+- [ ] (pending) Implement dataset building for `fetch_stocktwits_messages`: record StockTwits sentiment text and distinguish empty results from source access failures where possible.
+- [ ] (pending) Implement dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
+- [ ] (pending) Implement dataset building for `get_balance_sheet`: record best-effort balance-sheet text for each ticker and trading day.
+- [ ] (pending) Implement dataset building for `get_cashflow`: record best-effort cashflow text for each ticker and trading day.
+- [ ] (pending) Implement dataset building for `get_income_statement`: record best-effort income-statement text for each ticker and trading day.
 - [ ] (pending) If the availability gate fails for the configured 2024-Q1 evaluation, scan candidate replacement periods and record findings before building any dataset.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/eval_tools.py` (dataset-backed `DatasetBackedTool` + `build_dataset_tools`). Remaining: the analyst-crew tool-injection seam.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/backtest.py` (`simulate_position` + `cumulative_return`).
@@ -117,7 +127,9 @@ future contributor can gauge the rate of progress.
   `fetch_rss_posts` also ignored the `Retry-After` header.
   Fix: `fetch_all_posts` now OR-joins the alias tuple into one query per
   (ticker, subreddit) (`27 → 9` requests) and `fetch_rss_posts` honors `Retry-After`
-  (capped 60s) before falling back to the fixed 10/20/40s backoff. 429s still occur
+  (capped 60s) before falling back to the fixed 10/20/40s backoff. The successful
+  scanner run used `--delay 8`; use **at least 10 seconds between Reddit RSS
+  requests** in dataset ingestion to add a 2-second safety buffer. 429s still occur
   on this datacenter IP but are now **non-fatal**: bounded retries then continue, so
   the run terminates with usable partial coverage instead of hanging. Reliably
   eliminating 429 would require Reddit OAuth (`oauth.reddit.com`, 100 req/min), which
@@ -222,6 +234,15 @@ is ideal).
   lookback window has at least one Reddit post, then by stricter >=3-post coverage,
   minimum per-ticker coverage, and total posts.
   Date/Author: 2026-06-15 / Codex
+
+- Decision: Split dataset-builder progress by the ten analyst data tools.
+  Rationale: The Reddit HTTP 429 investigation showed that each data source can fail
+  for a different operational reason: request volume, provider rate limits, blocked
+  endpoints, empty historical coverage, parser errors, or stale API assumptions. The
+  builder should be implemented and validated one tool at a time so each source-specific
+  issue is diagnosed and fixed without hiding it inside a single broad "build dataset"
+  task.
+  Date/Author: 2026-06-16 / Codex
 
 Record every further decision here, with the reasoning, as the plan evolves.
 
@@ -429,6 +450,32 @@ the build is idempotent. Support `--tickers`, `--limit-days`, `--verify-only`, a
 `--scan-periods` checks candidate 61-trading-day windows, such as later 2024 quarters
 and 2025-Q1, and reports whether every required source is available; it must not change
 `EvaluationSettings.start_date` or `end_date`.
+
+When implementing the `get_stock_data` portion, include the default benchmark ticker,
+SPY, in addition to AAPL, GOOGL, and AMZN. SPY is not just a calendar source: the
+self-reflection portfolio manager uses benchmark-relative realized metrics, so the
+dataset must contain SPY close prices and replayable `get_stock_data` payloads wherever
+the evaluation may need benchmark history.
+
+Treat the ten analyst data tools as ten separate builder sub-tasks, not as one monolith.
+Implement and validate `get_stock_data`, `get_indicators`, `get_news`,
+`get_global_news`, `fetch_reddit_posts`, `fetch_stocktwits_messages`,
+`get_fundamentals`, `get_balance_sheet`, `get_cashflow`, and
+`get_income_statement` one by one. If a source exposes a new failure mode while its
+payloads are being recorded, stop and resolve that source-specific issue before moving
+to the next tool. This is especially important for Reddit. The Plan B scanner in
+`plans/07b_reddit_coverage_scanner.md` found that Reddit HTTP 429s were caused by too
+many unauthenticated RSS requests from a cloud/datacenter IP, not a total IP block. A
+single request could return HTTP 200, but `3 tickers × 3 subreddits × 3 aliases = 27`
+requests exceeded Reddit's tight shared budget. The scanner fix OR-joined aliases into
+one query per `(ticker, subreddit)`, reducing volume from 27 requests to 9, and made
+429s bounded and non-fatal by honoring `Retry-After` before falling back to fixed
+backoff. The scanner completed with `--delay 8`; the dataset builder should use **at
+least 10 seconds between Reddit RSS requests** to include a 2-second buffer. Reuse that
+lesson for any Reddit dataset ingestion path: minimize request volume, preserve
+structured statuses such as `ok`, `empty`, `blocked`, `rate_limited`, `timeout`, and
+`parse_error`, and never collapse access failures into ordinary "No data available"
+strings during verification.
 
 Before changing the configured backtest dates for Plan B, run
 `uv run scan-reddit-coverage`. Treat its recommended quarter as the candidate
