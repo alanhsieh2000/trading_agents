@@ -11,11 +11,7 @@ After this change, a user can run the same TradingAgents cumulative-return evalu
 
 The user-visible behavior should be the same as Plan 07 except for the dates and dataset artifact. From the project root, a user can build an isolated Plan B prepared dataset and run the backtest:
 
-    TRADING_AGENTS_EVALUATION__START_DATE=2026-01-01 \
-    TRADING_AGENTS_EVALUATION__END_DATE=2026-03-31 \
-    TRADING_AGENTS_EVALUATION__BUFFER_START_DATE=2025-12-01 \
-    TRADING_AGENTS_EVALUATION__DATASET_PATH=data/eval_dataset_2026q1.duckdb \
-    uv run build-eval-dataset
+    uv run build-plan-b-eval-dataset
 
     TRADING_AGENTS_EVALUATION__START_DATE=2026-01-01 \
     TRADING_AGENTS_EVALUATION__END_DATE=2026-03-31 \
@@ -37,7 +33,7 @@ The concrete result values above are illustrative. The final implementation must
 
 - [x] (2026-06-16) Completed the Plan B Reddit coverage scanner and recorded its recommendation in `plans/07_evaluation_backtest.md`: 2026-Q1 ranked first with `posts=176`, `>=1 coverage=82.0%`, `>=3 coverage=71.6%`, `min ticker coverage=50.8%`, and `pairs=6/9`.
 - [x] (2026-06-16) Verified the 2026-Q1 trading calendar with yfinance: SPY, AAPL, GOOGL, and AMZN each have 61 rows from 2026-01-02 through 2026-03-31 for the inclusive Plan B window `2026-01-01..2026-03-31`.
-- [ ] (pending) Ensure `build-eval-dataset` accepts date and dataset-path overrides through `EvaluationSettings` without changing Plan 07 defaults.
+- [x] (2026-06-16) Added the `build-plan-b-eval-dataset` entry point skeleton and verified it uses Plan B dates and dataset path without taking over the reserved Plan 07 `build-eval-dataset` command; `--verify-only` prints resolved settings and skips DuckDB writes.
 - [ ] (pending) Implement the shared price-table and trading-day calendar build for Plan B: write close prices for AAPL, GOOGL, AMZN, and the default benchmark ticker, SPY, into `data/eval_dataset_2026q1.duckdb` before recording per-tool payloads.
 - [ ] (pending) Implement Plan B dataset building for `get_stock_data`: record the market-data text block for AAPL, GOOGL, AMZN, and SPY on each trading day using the same lookback window the analyst stage will request; SPY history is required by the portfolio manager's self-reflection and benchmark-relative realized-return calculations.
 - [ ] (pending) Implement Plan B dataset building for `get_indicators`: record the indicator text block for each ticker and trading day using the same indicator list and lookback window as the analyst stage.
@@ -107,6 +103,20 @@ Record every further decision here, with the reasoning, as the plan evolves.
 
 ## Outcomes & Retrospective
 
+Milestone 0 — Plan B builder configuration seam (2026-06-16). Added
+`src/trading_agents/evaluation/build_dataset.py` and registered the Plan B-specific
+`build-plan-b-eval-dataset` command in `pyproject.toml`. The canonical
+`build-eval-dataset` command name remains reserved for the original Plan 07
+evaluation. The Plan B command resolves the shared `EvaluationSettings` values that
+should remain common, such as tickers, benchmark, weights, and price tail days, while
+defaulting its own period and artifact to `2026-01-01..2026-03-31`,
+`2025-12-01`, and `data/eval_dataset_2026q1.duckdb`. It supports `--verify-only`
+without creating a DuckDB file. Focused tests in
+`tests/test_eval_build_dataset.py` cover Plan 07 defaults, Plan B environment
+defaults, ticker CLI overrides, and the no-write verify-only behavior. Actual source
+availability checks and dataset writes remain pending in the following tool-specific
+steps.
+
 No Plan B evaluation run has been completed yet.
 
 When the Plan B dataset and full run are complete, update this section with:
@@ -157,11 +167,11 @@ Definitions used in this plan:
 
 ## Plan of Work
 
-This plan is intentionally smaller than Plan 07 because the architecture is already specified there. Do not fork the evaluator. Instead, implement or finish the Plan 07 evaluator so all relevant dates and paths come from `EvaluationSettings`, then run that evaluator with Plan B overrides.
+This plan is intentionally smaller than Plan 07 because the architecture is already specified there. Do not fork the evaluator. Instead, implement or finish the shared evaluator pieces, then expose Plan B through Plan B-specific command names and artifacts.
 
-First, keep the canonical defaults in `src/trading_agents/config/settings.py` unchanged. The defaults should continue to describe the 2024-Q1 README/paper period and `data/eval_dataset.duckdb`. Plan B is selected through environment overrides or explicit CLI options, not by changing defaults.
+First, keep the canonical defaults in `src/trading_agents/config/settings.py` unchanged. The defaults should continue to describe the 2024-Q1 README/paper period and `data/eval_dataset.duckdb`. Plan B dataset building is selected through `build-plan-b-eval-dataset`, not by taking over the reserved canonical `build-eval-dataset` name or changing settings defaults.
 
-Second, ensure `build-eval-dataset` and `run-eval` consistently read these fields from `get_settings().evaluation`: `dataset_path`, `tickers`, `benchmark`, `start_date`, `end_date`, `buffer_start_date`, `price_tail_days`, `weight_over`, and `weight_under`. Any hard-coded 2024 dates inside builder or runner code must be replaced by settings reads. The actual implementation may also expose CLI flags, but the environment variables shown in this plan must work.
+Second, ensure `build-plan-b-eval-dataset` uses the Plan B-specific dates and dataset path while still reading shared fields from `get_settings().evaluation`: `tickers`, `benchmark`, `price_tail_days`, `weight_over`, and `weight_under`. Keep the command name separate from `build-eval-dataset`, which is reserved for the original Plan 07 evaluation. Any hard-coded 2024 dates inside Plan B builder or runner code must be replaced by the Plan B constants or explicit Plan B options.
 
 Third, build the Plan B dataset using the same source rules as Plan 07. Prices and indicators come from yfinance historical data. News and social blocks come from the existing historical source layer, with Reddit treated as required. Fundamentals remain best-effort current snapshots unless a point-in-time source has been added separately.
 
@@ -182,17 +192,20 @@ Fifth, update this ExecPlan as work proceeds. If the source availability gate fa
 
 Run all commands from `/app/trading_agents`.
 
-1. Confirm settings can be overridden for Plan B:
+1. Confirm the Plan B dataset command resolves Plan B dates and path without changing
+   Plan 07 defaults:
 
-       TRADING_AGENTS_EVALUATION__START_DATE=2026-01-01 \
-       TRADING_AGENTS_EVALUATION__END_DATE=2026-03-31 \
-       TRADING_AGENTS_EVALUATION__BUFFER_START_DATE=2025-12-01 \
-       TRADING_AGENTS_EVALUATION__DATASET_PATH=data/eval_dataset_2026q1.duckdb \
-       uv run python -c "from trading_agents.config import get_settings; e=get_settings().evaluation; print(e.start_date, e.end_date, e.buffer_start_date, e.dataset_path)"
+       uv run build-plan-b-eval-dataset --verify-only
 
    Expected:
 
-       2026-01-01 2026-03-31 2025-12-01 data/eval_dataset_2026q1.duckdb
+       Evaluation dataset settings
+       dataset_path: data/eval_dataset_2026q1.duckdb
+       tickers: AAPL, GOOGL, AMZN
+       benchmark: SPY
+       window: 2026-01-01..2026-03-31
+       buffer_start_date: 2025-12-01
+       verify-only: dataset writes skipped
 
 2. Verify the Plan B trading calendar:
 
@@ -218,11 +231,7 @@ Run all commands from `/app/trading_agents`.
 
 4. Verify Plan B source availability before writing the dataset. This needs `EXA_API_KEY` and network access:
 
-       TRADING_AGENTS_EVALUATION__START_DATE=2026-01-01 \
-       TRADING_AGENTS_EVALUATION__END_DATE=2026-03-31 \
-       TRADING_AGENTS_EVALUATION__BUFFER_START_DATE=2025-12-01 \
-       TRADING_AGENTS_EVALUATION__DATASET_PATH=data/eval_dataset_2026q1.duckdb \
-       uv run build-eval-dataset --verify-only
+       uv run build-plan-b-eval-dataset --verify-only
 
    Expected success: a compact source-by-source report showing ticker news, global news, Reddit, and StockTwits available for the Plan B probe window, followed by zero exit code and no DuckDB writes.
 
@@ -230,11 +239,7 @@ Run all commands from `/app/trading_agents`.
 
 5. Build a small Plan B dataset slice:
 
-       TRADING_AGENTS_EVALUATION__START_DATE=2026-01-01 \
-       TRADING_AGENTS_EVALUATION__END_DATE=2026-03-31 \
-       TRADING_AGENTS_EVALUATION__BUFFER_START_DATE=2025-12-01 \
-       TRADING_AGENTS_EVALUATION__DATASET_PATH=data/eval_dataset_2026q1.duckdb \
-       uv run build-eval-dataset --tickers AAPL --limit-days 3
+       uv run build-plan-b-eval-dataset --tickers AAPL --limit-days 3
 
    Expected: `data/eval_dataset_2026q1.duckdb` exists and contains prices plus recorded tool outputs for AAPL over three transaction days. `data/eval_dataset.duckdb` must not be created or modified by this command unless it already existed for Plan 07 and is untouched.
 
@@ -250,11 +255,7 @@ Run all commands from `/app/trading_agents`.
 
 7. Build and run the full Plan B evaluation:
 
-       TRADING_AGENTS_EVALUATION__START_DATE=2026-01-01 \
-       TRADING_AGENTS_EVALUATION__END_DATE=2026-03-31 \
-       TRADING_AGENTS_EVALUATION__BUFFER_START_DATE=2025-12-01 \
-       TRADING_AGENTS_EVALUATION__DATASET_PATH=data/eval_dataset_2026q1.duckdb \
-       uv run build-eval-dataset
+       uv run build-plan-b-eval-dataset
 
        TRADING_AGENTS_EVALUATION__START_DATE=2026-01-01 \
        TRADING_AGENTS_EVALUATION__END_DATE=2026-03-31 \
@@ -270,17 +271,17 @@ Run all commands from `/app/trading_agents`.
 Acceptance is behavioral:
 
 - Plan 07 defaults remain unchanged: importing `get_settings().evaluation` with no Plan B environment variables still returns `start_date='2024-01-01'`, `end_date='2024-03-29'`, and `dataset_path='data/eval_dataset.duckdb'`.
-- Plan B overrides work through the documented `TRADING_AGENTS_EVALUATION__...` environment variables.
+- `build-plan-b-eval-dataset --verify-only` resolves the Plan B dataset path and dates without environment overrides and without changing Plan 07 defaults.
 - `uv run pytest tests/test_eval_backtest.py tests/test_eval_dataset.py tests/test_eval_exa_sources.py tests/test_eval_reddit_coverage.py` passes, along with any builder or runner tests added by Plan 07 implementation.
-- `uv run build-eval-dataset --verify-only` with Plan B overrides checks source availability before creating or modifying `data/eval_dataset_2026q1.duckdb`.
-- `uv run build-eval-dataset --tickers AAPL --limit-days 3` with Plan B overrides creates or refreshes only the Plan B dataset artifact.
+- `uv run build-plan-b-eval-dataset --verify-only` checks source availability before creating or modifying `data/eval_dataset_2026q1.duckdb`.
+- `uv run build-plan-b-eval-dataset --tickers AAPL --limit-days 3` creates or refreshes only the Plan B dataset artifact.
 - `uv run run-eval --tickers AAPL --limit-days 3` with Plan B overrides produces a rating list and CR value while reading analyst data from the Plan B dataset.
 - The full Plan B run reports CR for AAPL, GOOGL, and AMZN over `2026-01-01..2026-03-31`, with transaction days `2026-01-02..2026-03-31`.
 
 
 ## Idempotence and Recovery
 
-The Plan B dataset path is separate from the canonical Plan 07 dataset path. Rebuilding Plan B should use idempotent DuckDB upserts, so rerunning the builder refreshes rows instead of duplicating them. If the build is interrupted after source verification passes, rerun the same command with the same environment variables.
+The Plan B dataset path is separate from the canonical Plan 07 dataset path. Rebuilding Plan B should use idempotent DuckDB upserts, so rerunning the builder refreshes rows instead of duplicating them. If the build is interrupted after source verification passes, rerun the same Plan B command.
 
 The source availability check must run before DuckDB writes. If `EXA_API_KEY` is missing, or if ticker news, global news, Reddit, or StockTwits is unavailable for the Plan B probe window, the builder should fail clearly and leave the Plan B dataset untouched.
 
@@ -328,28 +329,24 @@ Plan B should not introduce new public APIs unless the Plan 07 implementation st
 - `src/trading_agents/evaluation/dataset.py` provides `EvalDataset`.
 - `src/trading_agents/evaluation/backtest.py` provides the pure exchange simulator and CR calculation.
 - `src/trading_agents/evaluation/exa_sources.py` provides historical news and social source helpers.
-- `src/trading_agents/evaluation/build_dataset.py` provides the `build-eval-dataset` entry point.
+- `src/trading_agents/evaluation/build_dataset.py` provides the `build-plan-b-eval-dataset` entry point; `build-eval-dataset` remains reserved for Plan 07.
 - `src/trading_agents/evaluation/run_eval.py` provides the `run-eval` entry point.
 - `pyproject.toml` registers the console scripts.
 
-These settings fields must control Plan B behavior:
+These settings fields must still control shared Plan B behavior:
 
     EvaluationSettings.enabled
-    EvaluationSettings.dataset_path
     EvaluationSettings.tickers
     EvaluationSettings.benchmark
-    EvaluationSettings.start_date
-    EvaluationSettings.end_date
-    EvaluationSettings.buffer_start_date
     EvaluationSettings.price_tail_days
     EvaluationSettings.weight_over
     EvaluationSettings.weight_under
 
-The required environment overrides for Plan B are:
+The Plan B builder command itself owns these Plan B-specific defaults:
 
-    TRADING_AGENTS_EVALUATION__START_DATE=2026-01-01
-    TRADING_AGENTS_EVALUATION__END_DATE=2026-03-31
-    TRADING_AGENTS_EVALUATION__BUFFER_START_DATE=2025-12-01
-    TRADING_AGENTS_EVALUATION__DATASET_PATH=data/eval_dataset_2026q1.duckdb
+    start_date=2026-01-01
+    end_date=2026-03-31
+    buffer_start_date=2025-12-01
+    dataset_path=data/eval_dataset_2026q1.duckdb
 
 Revision Note: 2026-06-16 Initial Plan B ExecPlan drafted after the Reddit coverage scanner ranked 2026-Q1 first and yfinance confirmed 61 trading days for SPY, AAPL, GOOGL, and AMZN from 2026-01-02 through 2026-03-31. This plan intentionally keeps Plan 07 as the canonical 2024-Q1 evaluation and uses a separate Plan B dataset artifact.
