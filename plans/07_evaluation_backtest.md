@@ -99,6 +99,14 @@ future contributor can gauge the rate of progress.
   **61 trading days** (2024-01-02 .. 2024-03-28), matching the README's "61 transaction
   days".
   Evidence: `uv run python -c "import yfinance as yf; print(len(yf.download('AAPL', start='2024-01-01', end='2024-03-30', progress=False, auto_adjust=False)))"` returns `61`; first row 2024-01-02, last 2024-03-28, and 2024-03-29 is absent (holiday).
+- Observation: The Plan B Reddit coverage scanner could not complete a live ranked
+  recommendation in this environment because Reddit repeatedly returned HTTP 429.
+  Evidence: `uv run scan-reddit-coverage --delay 3` on 2026-06-16 repeatedly printed
+  warnings such as `HTTP 429; retrying in 10s`, `20s`, and `40s` for AAPL Reddit RSS
+  queries and was manually stopped before a ranking was printed. A fallback
+  `timeout 600 uv run scan-reddit-coverage --delay 10` attempt also repeatedly hit
+  HTTP 429 retry warnings and was manually stopped before completion, so no Plan B
+  quarter recommendation was recorded.
 
 Add new observations here as they arise, with a short evidence snippet (test output
 is ideal).

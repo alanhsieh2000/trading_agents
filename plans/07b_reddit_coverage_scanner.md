@@ -737,7 +737,7 @@ git commit -m "docs: record plan b reddit coverage selection"
 **Files:**
 - No code changes unless verification exposes a bug.
 
-- [ ] **Step 1: Run focused tests**
+- [x] **Step 1: Run focused tests**
 
 ```bash
 uv run pytest tests/test_eval_reddit_coverage.py tests/test_trading_tools.py -q
@@ -745,7 +745,7 @@ uv run pytest tests/test_eval_reddit_coverage.py tests/test_trading_tools.py -q
 
 Expected: all focused tests pass.
 
-- [ ] **Step 2: Run full test suite**
+- [x] **Step 2: Run full test suite**
 
 ```bash
 uv run pytest
@@ -753,7 +753,7 @@ uv run pytest
 
 Expected: all tests pass.
 
-- [ ] **Step 3: Run live scanner smoke**
+- [x] **Step 3: Run live scanner smoke** _(blocked by repeated HTTP 429; recorded in Plan 07)_
 
 ```bash
 uv run scan-reddit-coverage --delay 3
@@ -761,7 +761,7 @@ uv run scan-reddit-coverage --delay 3
 
 Expected: command prints `Plan B Reddit coverage scan`, three ranked quarters, and `Recommended Plan B period: ...`. If Reddit returns `HTTP 429`, the scanner automatically retries after 10, 20, and 40 seconds. If all automatic retries fail, rerun once with a larger `--delay` and record the warning in `plans/07_evaluation_backtest.md`.
 
-- [ ] **Step 4: Record live scanner result in Plan 07**
+- [x] **Step 4: Record live scanner result in Plan 07**
 
 Add a dated **Surprises & Discoveries** entry with:
 
@@ -771,7 +771,7 @@ Add a dated **Surprises & Discoveries** entry with:
   Evidence: `uv run scan-reddit-coverage --delay 3` on 2026-06-15 printed [summary].
 ```
 
-- [ ] **Step 5: Commit verification note**
+- [x] **Step 5: Commit verification note**
 
 ```bash
 git add plans/07_evaluation_backtest.md
