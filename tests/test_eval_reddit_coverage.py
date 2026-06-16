@@ -1,4 +1,5 @@
 from datetime import date, datetime, timezone
+from urllib.error import HTTPError
 
 from trading_agents.evaluation import reddit_coverage
 from trading_agents.evaluation.reddit_coverage import (
@@ -28,6 +29,20 @@ ATOM = b"""<?xml version="1.0" encoding="UTF-8"?>
     <content type="html">Duplicate body</content>
   </entry>
 </feed>"""
+
+
+class FakeResponse:
+    def __init__(self, payload: bytes):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def read(self):
+        return self.payload
 
 
 def test_parse_reddit_atom_extracts_posts():
@@ -88,6 +103,56 @@ def test_dedupe_posts_prefers_first_url():
     posts = parse_reddit_atom(ATOM, ticker="AAPL", subreddit="wallstreetbets")
 
     assert dedupe_posts(posts) == [posts[0]]
+
+
+def test_fetch_rss_posts_retries_429_before_success(monkeypatch):
+    attempts = [
+        HTTPError("https://reddit.example", 429, "Too Many Requests", None, None),
+        HTTPError("https://reddit.example", 429, "Too Many Requests", None, None),
+        FakeResponse(ATOM),
+    ]
+    sleeps = []
+
+    def fake_urlopen(request, timeout):
+        result = attempts.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(reddit_coverage, "urlopen", fake_urlopen)
+    monkeypatch.setattr(reddit_coverage.time, "sleep", sleeps.append)
+
+    posts = reddit_coverage.fetch_rss_posts(
+        ticker="AAPL",
+        subreddit="wallstreetbets",
+        query="AAPL",
+    )
+
+    assert len(posts) == 2
+    assert sleeps == [10.0, 20.0]
+
+
+def test_fetch_rss_posts_gives_up_after_three_429_retries(monkeypatch):
+    attempts = [
+        HTTPError("https://reddit.example", 429, "Too Many Requests", None, None)
+        for _ in range(4)
+    ]
+    sleeps = []
+
+    def fake_urlopen(request, timeout):
+        raise attempts.pop(0)
+
+    monkeypatch.setattr(reddit_coverage, "urlopen", fake_urlopen)
+    monkeypatch.setattr(reddit_coverage.time, "sleep", sleeps.append)
+
+    posts = reddit_coverage.fetch_rss_posts(
+        ticker="AAPL",
+        subreddit="wallstreetbets",
+        query="AAPL",
+    )
+
+    assert posts == []
+    assert sleeps == [10.0, 20.0, 40.0]
 
 
 def _post(ticker: str, subreddit: str, yyyy_mm_dd: str) -> RedditPost:

@@ -20,6 +20,7 @@ from trading_agents.tools.sentiment import REDDIT_HEADERS
 
 
 ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
+REDDIT_HTTP_429_RETRY_DELAYS = (10.0, 20.0, 40.0)
 
 
 @dataclass(frozen=True)
@@ -166,16 +167,29 @@ def fetch_rss_posts(*, ticker: str, subreddit: str, query: str) -> list[RedditPo
     )
     url = f"https://www.reddit.com/r/{quote(subreddit)}/search.rss?{qs}"
     request = Request(url, headers=REDDIT_HEADERS)
-    try:
-        with urlopen(request, timeout=20) as response:
-            payload = response.read()
-    except HTTPError as exc:
-        print(f"warning: Reddit RSS {ticker} r/{subreddit} query={query!r} HTTP {exc.code}")
-        return []
-    except (URLError, TimeoutError) as exc:
-        print(f"warning: Reddit RSS {ticker} r/{subreddit} query={query!r} failed: {exc}")
-        return []
-    return parse_reddit_atom(payload, ticker=ticker, subreddit=subreddit)
+    for attempt in range(len(REDDIT_HTTP_429_RETRY_DELAYS) + 1):
+        try:
+            with urlopen(request, timeout=20) as response:
+                payload = response.read()
+            return parse_reddit_atom(payload, ticker=ticker, subreddit=subreddit)
+        except HTTPError as exc:
+            if exc.code == 429 and attempt < len(REDDIT_HTTP_429_RETRY_DELAYS):
+                delay = REDDIT_HTTP_429_RETRY_DELAYS[attempt]
+                print(
+                    f"warning: Reddit RSS {ticker} r/{subreddit} query={query!r} "
+                    f"HTTP 429; retrying in {delay:.0f}s"
+                )
+                time.sleep(delay)
+                continue
+            print(
+                f"warning: Reddit RSS {ticker} r/{subreddit} query={query!r} "
+                f"HTTP {exc.code}"
+            )
+            return []
+        except (URLError, TimeoutError) as exc:
+            print(f"warning: Reddit RSS {ticker} r/{subreddit} query={query!r} failed: {exc}")
+            return []
+    return []
 
 
 def fetch_trading_days(start_date: date, end_date: date, benchmark: str) -> list[date]:

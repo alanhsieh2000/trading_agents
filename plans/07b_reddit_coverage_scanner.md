@@ -525,6 +525,7 @@ DEFAULT_QUERY_ALIASES = {
     "GOOGL": ("GOOGL", "$GOOGL", "Google"),
     "AMZN": ("AMZN", "$AMZN", "Amazon"),
 }
+REDDIT_HTTP_429_RETRY_DELAYS = (10.0, 20.0, 40.0)
 
 
 def fetch_all_posts(
@@ -556,16 +557,29 @@ def fetch_rss_posts(*, ticker: str, subreddit: str, query: str) -> list[RedditPo
     )
     url = f"https://www.reddit.com/r/{quote(subreddit)}/search.rss?{qs}"
     request = Request(url, headers=REDDIT_HEADERS)
-    try:
-        with urlopen(request, timeout=20) as response:
-            payload = response.read()
-    except HTTPError as exc:
-        print(f"warning: Reddit RSS {ticker} r/{subreddit} query={query!r} HTTP {exc.code}")
-        return []
-    except (URLError, TimeoutError) as exc:
-        print(f"warning: Reddit RSS {ticker} r/{subreddit} query={query!r} failed: {exc}")
-        return []
-    return parse_reddit_atom(payload, ticker=ticker, subreddit=subreddit)
+    for attempt in range(len(REDDIT_HTTP_429_RETRY_DELAYS) + 1):
+        try:
+            with urlopen(request, timeout=20) as response:
+                payload = response.read()
+            return parse_reddit_atom(payload, ticker=ticker, subreddit=subreddit)
+        except HTTPError as exc:
+            if exc.code == 429 and attempt < len(REDDIT_HTTP_429_RETRY_DELAYS):
+                delay = REDDIT_HTTP_429_RETRY_DELAYS[attempt]
+                print(
+                    f"warning: Reddit RSS {ticker} r/{subreddit} query={query!r} "
+                    f"HTTP 429; retrying in {delay:.0f}s"
+                )
+                time.sleep(delay)
+                continue
+            print(
+                f"warning: Reddit RSS {ticker} r/{subreddit} query={query!r} "
+                f"HTTP {exc.code}"
+            )
+            return []
+        except (URLError, TimeoutError) as exc:
+            print(f"warning: Reddit RSS {ticker} r/{subreddit} query={query!r} failed: {exc}")
+            return []
+    return []
 
 
 def fetch_trading_days(start_date: date, end_date: date, benchmark: str) -> list[date]:
@@ -745,7 +759,7 @@ Expected: all tests pass.
 uv run scan-reddit-coverage --delay 3
 ```
 
-Expected: command prints `Plan B Reddit coverage scan`, three ranked quarters, and `Recommended Plan B period: ...`. If Reddit returns `HTTP 429`, rerun once with `--delay 10` and record the warning in `plans/07_evaluation_backtest.md`.
+Expected: command prints `Plan B Reddit coverage scan`, three ranked quarters, and `Recommended Plan B period: ...`. If Reddit returns `HTTP 429`, the scanner automatically retries after 10, 20, and 40 seconds. If all automatic retries fail, rerun once with a larger `--delay` and record the warning in `plans/07_evaluation_backtest.md`.
 
 - [ ] **Step 4: Record live scanner result in Plan 07**
 
@@ -771,5 +785,6 @@ git commit -m "docs: record reddit coverage scan result"
 - Subreddits come from `get_settings().sentiment.reddit_subreddits`, currently `wallstreetbets`, `stocks`, `investing`.
 - Query aliases are hard-coded only for the three evaluation tickers: `AAPL/$AAPL/Apple`, `GOOGL/$GOOGL/Google`, `AMZN/$AMZN/Amazon`.
 - Reddit RSS probes use `sort=new&t=year&limit=100`; `sort=old` is not used because probes showed it is not reliable as chronological ordering.
+- Reddit RSS probes automatically retry HTTP 429 responses after 10, 20, and 40 seconds before falling back to the user-controlled `--delay` pacing knob.
 - One RSS request returns at most 100 entries and no pagination link is assumed.
 - The scanner recommends a quarter; it does not change `EvaluationSettings.start_date` or `end_date`.
