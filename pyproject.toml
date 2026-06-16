@@ -28,6 +28,7 @@ kickoff = "trading_agents.main:kickoff"
 plot = "trading_agents.main:plot"
 run_with_trigger = "trading_agents.main:run_with_trigger"
 analyze = "trading_agents.main:cli"
+scan-reddit-coverage = "trading_agents.evaluation.reddit_coverage:main"
 
 [build-system]
 requires = ["hatchling"]

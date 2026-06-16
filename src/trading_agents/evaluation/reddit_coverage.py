@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import argparse
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 import html
 import re
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode
+from urllib.request import Request, urlopen
+
+import yfinance as yf
+
+from trading_agents.config import get_settings
+from trading_agents.tools.sentiment import REDDIT_HEADERS
 
 
 ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
@@ -39,6 +49,18 @@ class CoverageScore:
     covered_ticker_days_at_least_3: int
     min_ticker_coverage_at_least_1: float
     nonzero_ticker_subreddit_pairs: int
+
+
+DEFAULT_CANDIDATES = (
+    CandidateQuarter("2025-Q3", date(2025, 7, 1), date(2025, 9, 30)),
+    CandidateQuarter("2025-Q4", date(2025, 10, 1), date(2025, 12, 31)),
+    CandidateQuarter("2026-Q1", date(2026, 1, 1), date(2026, 3, 31)),
+)
+DEFAULT_QUERY_ALIASES = {
+    "AAPL": ("AAPL", "$AAPL", "Apple"),
+    "GOOGL": ("GOOGL", "$GOOGL", "Google"),
+    "AMZN": ("AMZN", "$AMZN", "Amazon"),
+}
 
 
 def parse_reddit_atom(payload: bytes, *, ticker: str, subreddit: str) -> list[RedditPost]:
@@ -115,6 +137,110 @@ def score_candidate_quarters(
     )
 
 
+def fetch_all_posts(
+    *,
+    tickers: tuple[str, ...],
+    subreddits: tuple[str, ...],
+    queries: Mapping[str, tuple[str, ...]],
+    request_delay_seconds: float,
+) -> list[RedditPost]:
+    posts: list[RedditPost] = []
+    for ticker in tickers:
+        for subreddit in subreddits:
+            for query in queries.get(ticker, (ticker,)):
+                posts.extend(fetch_rss_posts(ticker=ticker, subreddit=subreddit, query=query))
+                if request_delay_seconds > 0:
+                    time.sleep(request_delay_seconds)
+    return dedupe_posts(posts)
+
+
+def fetch_rss_posts(*, ticker: str, subreddit: str, query: str) -> list[RedditPost]:
+    qs = urlencode(
+        {
+            "q": query,
+            "restrict_sr": "on",
+            "sort": "new",
+            "t": "year",
+            "limit": 100,
+        }
+    )
+    url = f"https://www.reddit.com/r/{quote(subreddit)}/search.rss?{qs}"
+    request = Request(url, headers=REDDIT_HEADERS)
+    try:
+        with urlopen(request, timeout=20) as response:
+            payload = response.read()
+    except HTTPError as exc:
+        print(f"warning: Reddit RSS {ticker} r/{subreddit} query={query!r} HTTP {exc.code}")
+        return []
+    except (URLError, TimeoutError) as exc:
+        print(f"warning: Reddit RSS {ticker} r/{subreddit} query={query!r} failed: {exc}")
+        return []
+    return parse_reddit_atom(payload, ticker=ticker, subreddit=subreddit)
+
+
+def fetch_trading_days(start_date: date, end_date: date, benchmark: str) -> list[date]:
+    frame = yf.download(
+        benchmark,
+        start=start_date.isoformat(),
+        end=(end_date + timedelta(days=1)).isoformat(),
+        progress=False,
+        auto_adjust=False,
+    )
+    if frame.empty:
+        return []
+    return [idx.date() for idx in frame.index]
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Scan Reddit RSS coverage for Plan B backtest quarters."
+    )
+    parser.add_argument("--delay", type=float, default=3.0)
+    parser.add_argument("--lookback-days", type=int, default=7)
+    args = parser.parse_args(argv)
+
+    settings = get_settings()
+    tickers = tuple(settings.evaluation.tickers)
+    subreddits = tuple(settings.sentiment.reddit_subreddits)
+    queries = {ticker: DEFAULT_QUERY_ALIASES.get(ticker, (ticker,)) for ticker in tickers}
+    posts = fetch_all_posts(
+        tickers=tickers,
+        subreddits=subreddits,
+        queries=queries,
+        request_delay_seconds=args.delay,
+    )
+    trading_days = {
+        candidate.name: fetch_trading_days(
+            candidate.start_date,
+            candidate.end_date,
+            settings.evaluation.benchmark,
+        )
+        for candidate in DEFAULT_CANDIDATES
+    }
+    scores = score_candidate_quarters(
+        DEFAULT_CANDIDATES,
+        posts,
+        tickers=tickers,
+        subreddits=subreddits,
+        trading_days_by_quarter=trading_days,
+        lookback_days=args.lookback_days,
+    )
+    print("Plan B Reddit coverage scan")
+    pair_count = len(tickers) * len(subreddits)
+    for index, score in enumerate(scores, start=1):
+        pct1 = 100 * score.covered_ticker_days_at_least_1 / max(score.ticker_day_count, 1)
+        pct3 = 100 * score.covered_ticker_days_at_least_3 / max(score.ticker_day_count, 1)
+        print(
+            f"{index}. {score.quarter}: posts={score.total_posts}, "
+            f">=1 coverage={pct1:.1f}%, >=3 coverage={pct3:.1f}%, "
+            f"min ticker coverage={100 * score.min_ticker_coverage_at_least_1:.1f}%, "
+            f"pairs={score.nonzero_ticker_subreddit_pairs}/{pair_count}"
+        )
+    if scores:
+        print(f"Recommended Plan B period: {scores[0].quarter}")
+    return 0
+
+
 def _dedupe_key(post: RedditPost) -> str:
     match = re.search(r"/comments/([^/]+)/", post.url)
     if match:
@@ -162,10 +288,13 @@ def _score_one_candidate(
                 covered_3 += 1
 
     trading_day_count = len(trading_days)
-    min_ticker_coverage = min(
-        (ticker_covered_counts[ticker] / trading_day_count for ticker in tickers),
-        default=0.0,
-    )
+    if trading_day_count == 0:
+        min_ticker_coverage = 0.0
+    else:
+        min_ticker_coverage = min(
+            (ticker_covered_counts[ticker] / trading_day_count for ticker in tickers),
+            default=0.0,
+        )
     return CoverageScore(
         quarter=candidate.name,
         total_posts=len(quarter_posts),
@@ -199,3 +328,7 @@ def _strip_reddit_html(value: str) -> str:
 
 def _one_line(value: str) -> str:
     return " ".join(str(value).split())
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,5 +1,6 @@
 from datetime import date, datetime, timezone
 
+from trading_agents.evaluation import reddit_coverage
 from trading_agents.evaluation.reddit_coverage import (
     CandidateQuarter,
     CoverageScore,
@@ -52,6 +53,35 @@ def test_parse_reddit_atom_extracts_posts():
             body="Duplicate body",
         ),
     ]
+
+
+def test_main_prints_ranked_recommendation(monkeypatch, capsys):
+    def fake_fetch_all_posts(*, tickers, subreddits, queries, request_delay_seconds):
+        assert tickers == ("AAPL", "GOOGL", "AMZN")
+        assert subreddits == ("wallstreetbets", "stocks", "investing")
+        assert queries["AAPL"] == ("AAPL", "$AAPL", "Apple")
+        assert request_delay_seconds == 3.0
+        return [
+            _post("AAPL", "wallstreetbets", "2026-01-02"),
+            _post("GOOGL", "stocks", "2026-01-03"),
+            _post("AMZN", "investing", "2026-01-04"),
+            _post("AAPL", "wallstreetbets", "2025-10-02"),
+        ]
+
+    def fake_trading_days(start_date, end_date, benchmark):
+        if start_date == date(2026, 1, 1):
+            return [date(2026, 1, 5), date(2026, 1, 6)]
+        return [start_date]
+
+    monkeypatch.setattr(reddit_coverage, "fetch_all_posts", fake_fetch_all_posts)
+    monkeypatch.setattr(reddit_coverage, "fetch_trading_days", fake_trading_days)
+
+    reddit_coverage.main([])
+
+    output = capsys.readouterr().out
+    assert "Plan B Reddit coverage scan" in output
+    assert "1. 2026-Q1" in output
+    assert "Recommended Plan B period: 2026-Q1" in output
 
 
 def test_dedupe_posts_prefers_first_url():
