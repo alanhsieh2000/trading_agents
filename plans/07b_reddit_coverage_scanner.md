@@ -778,6 +778,44 @@ git add plans/07_evaluation_backtest.md
 git commit -m "docs: record reddit coverage scan result"
 ```
 
+## Root Cause & Fix (HTTP 429, 2026-06-16)
+
+The originally-blocked live smoke (Task 5, Step 3) failed because the scanner hit
+repeated **HTTP 429** from `www.reddit.com`. Diagnosis:
+
+- **Not an IP block.** A single unauthenticated RSS request from this GCP host
+  returns HTTP 200 (100 entries spanning 2025-08-07..2026-06-10). The 429s were
+  driven by **request volume**: `main()` issued
+  `3 tickers × 3 subreddits × 3 query aliases = 27` sequential requests, exceeding
+  Reddit's tight shared budget for cloud/datacenter IPs.
+- **Weak retry.** `fetch_rss_posts` used a fixed 10/20/40s backoff and ignored the
+  `Retry-After` header Reddit sends on 429.
+
+**Fix applied** (`src/trading_agents/evaluation/reddit_coverage.py`):
+
+- `fetch_all_posts` now OR-joins each ticker's alias tuple into a single query per
+  (ticker, subreddit) — `"AAPL OR $AAPL OR Apple"` — cutting volume from 27 to
+  `len(tickers) × len(subreddits) = 9` requests, paced uniformly between every call.
+- `fetch_rss_posts` honors `Retry-After` (capped at 60s) on 429, falling back to the
+  fixed 10/20/40s delays when the header is absent (helper `_retry_after_seconds`,
+  mirroring `tools/sentiment.py`).
+- New tests: `test_fetch_all_posts_makes_one_request_per_ticker_subreddit` (asserts 9
+  OR-joined requests) and `test_fetch_rss_posts_honors_retry_after_header`.
+
+**Outcome.** 429s still occur on this datacenter IP, but are now **non-fatal**:
+bounded retries then continue, so the scanner terminates with usable partial
+coverage. `uv run python -m trading_agents.evaluation.reddit_coverage --delay 8`
+completed and recommended **2026-Q1** (`posts=176, >=1 coverage=82.0%,
+>=3 coverage=71.6%, min ticker coverage=50.8%, pairs=6/9`), ahead of 2025-Q4
+(posts=31) and 2025-Q3 (posts=0).
+
+**Known limitation (not fixed, by decision).** Reddit RSS returns only the 100
+newest posts per query (`t=year&limit=100`, no pagination), reaching back only to
+~Aug 2025. So 2025-Q3 is effectively unreachable and coverage skews to recent
+quarters — the 2026-Q1 recommendation reflects data-availability recency, not
+deeper historical sentiment. Reliably removing 429 and widening history would
+require Reddit OAuth (`oauth.reddit.com`, 100 req/min), which is out of scope.
+
 ## Assumptions and Defaults
 
 - Candidate quarters are exactly `2025-Q3`, `2025-Q4`, and `2026-Q1`.

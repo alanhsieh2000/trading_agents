@@ -146,13 +146,23 @@ def fetch_all_posts(
     request_delay_seconds: float,
 ) -> list[RedditPost]:
     posts: list[RedditPost] = []
+    first = True
     for ticker in tickers:
         for subreddit in subreddits:
-            for query in queries.get(ticker, (ticker,)):
-                posts.extend(fetch_rss_posts(ticker=ticker, subreddit=subreddit, query=query))
-                if request_delay_seconds > 0:
-                    time.sleep(request_delay_seconds)
+            # OR the alias tuple into a single query so each (ticker, subreddit)
+            # pair costs one request instead of one per alias. This keeps Reddit
+            # RSS volume to len(tickers) * len(subreddits) requests and avoids the
+            # unauthenticated rate limit that returns HTTP 429.
+            query = _join_query_aliases(queries.get(ticker, (ticker,)))
+            if not first and request_delay_seconds > 0:
+                time.sleep(request_delay_seconds)
+            first = False
+            posts.extend(fetch_rss_posts(ticker=ticker, subreddit=subreddit, query=query))
     return dedupe_posts(posts)
+
+
+def _join_query_aliases(aliases: tuple[str, ...]) -> str:
+    return " OR ".join(alias for alias in aliases if alias) or ""
 
 
 def fetch_rss_posts(*, ticker: str, subreddit: str, query: str) -> list[RedditPost]:
@@ -174,7 +184,10 @@ def fetch_rss_posts(*, ticker: str, subreddit: str, query: str) -> list[RedditPo
             return parse_reddit_atom(payload, ticker=ticker, subreddit=subreddit)
         except HTTPError as exc:
             if exc.code == 429 and attempt < len(REDDIT_HTTP_429_RETRY_DELAYS):
-                delay = REDDIT_HTTP_429_RETRY_DELAYS[attempt]
+                # Prefer Reddit's own Retry-After hint; it is often longer than
+                # our fixed backoff, so honoring it stops retries from expiring
+                # inside a single cooldown window.
+                delay = _retry_after_seconds(exc) or REDDIT_HTTP_429_RETRY_DELAYS[attempt]
                 print(
                     f"warning: Reddit RSS {ticker} r/{subreddit} query={query!r} "
                     f"HTTP 429; retrying in {delay:.0f}s"
@@ -318,6 +331,16 @@ def _score_one_candidate(
         min_ticker_coverage_at_least_1=min_ticker_coverage,
         nonzero_ticker_subreddit_pairs=len(pairs),
     )
+
+
+def _retry_after_seconds(exc: HTTPError) -> float | None:
+    try:
+        retry_after = exc.headers.get("Retry-After") if exc.headers else None
+        if not retry_after:
+            return None
+        return min(float(retry_after), 60.0)
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 def _parse_atom_datetime(value: str | None) -> datetime | None:

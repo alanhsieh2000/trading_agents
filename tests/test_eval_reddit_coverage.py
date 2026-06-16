@@ -155,6 +155,64 @@ def test_fetch_rss_posts_gives_up_after_three_429_retries(monkeypatch):
     assert sleeps == [10.0, 20.0, 40.0]
 
 
+def test_fetch_all_posts_makes_one_request_per_ticker_subreddit(monkeypatch):
+    calls = []
+
+    def fake_fetch_rss_posts(*, ticker, subreddit, query):
+        calls.append((ticker, subreddit, query))
+        return []
+
+    monkeypatch.setattr(reddit_coverage, "fetch_rss_posts", fake_fetch_rss_posts)
+    monkeypatch.setattr(reddit_coverage.time, "sleep", lambda _seconds: None)
+
+    reddit_coverage.fetch_all_posts(
+        tickers=("AAPL", "GOOGL", "AMZN"),
+        subreddits=("wallstreetbets", "stocks", "investing"),
+        queries={
+            "AAPL": ("AAPL", "$AAPL", "Apple"),
+            "GOOGL": ("GOOGL", "$GOOGL", "Google"),
+            "AMZN": ("AMZN", "$AMZN", "Amazon"),
+        },
+        request_delay_seconds=3.0,
+    )
+
+    assert len(calls) == 9
+    assert ("AAPL", "wallstreetbets", "AAPL OR $AAPL OR Apple") in calls
+    assert ("GOOGL", "stocks", "GOOGL OR $GOOGL OR Google") in calls
+
+
+def test_fetch_rss_posts_honors_retry_after_header(monkeypatch):
+    attempts = [
+        HTTPError(
+            "https://reddit.example",
+            429,
+            "Too Many Requests",
+            {"Retry-After": "5"},
+            None,
+        ),
+        FakeResponse(ATOM),
+    ]
+    sleeps = []
+
+    def fake_urlopen(request, timeout):
+        result = attempts.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(reddit_coverage, "urlopen", fake_urlopen)
+    monkeypatch.setattr(reddit_coverage.time, "sleep", sleeps.append)
+
+    posts = reddit_coverage.fetch_rss_posts(
+        ticker="AAPL",
+        subreddit="wallstreetbets",
+        query="AAPL",
+    )
+
+    assert len(posts) == 2
+    assert sleeps == [5.0]
+
+
 def _post(ticker: str, subreddit: str, yyyy_mm_dd: str) -> RedditPost:
     published_at = datetime.fromisoformat(yyyy_mm_dd + "T12:00:00+00:00")
     return RedditPost(

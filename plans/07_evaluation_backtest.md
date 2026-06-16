@@ -107,6 +107,32 @@ future contributor can gauge the rate of progress.
   `timeout 600 uv run scan-reddit-coverage --delay 10` attempt also repeatedly hit
   HTTP 429 retry warnings and was manually stopped before completion, so no Plan B
   quarter recommendation was recorded.
+- Observation (2026-06-16, resolved): The HTTP 429 root cause was **request volume
+  against the unauthenticated `www.reddit.com` RSS endpoint from this GCP datacenter
+  IP**, not an IP block. A single live request still returns HTTP 200
+  (`curl .../r/wallstreetbets/search.rss?q=AAPL&...&t=year&limit=100` → 200, 100
+  entries spanning 2025-08-07..2026-06-10), but the scanner fired
+  `3 tickers × 3 subreddits × 3 query aliases = 27` sequential requests, far above
+  Reddit's tight shared budget for cloud IPs, so 429s cascaded. The original
+  `fetch_rss_posts` also ignored the `Retry-After` header.
+  Fix: `fetch_all_posts` now OR-joins the alias tuple into one query per
+  (ticker, subreddit) (`27 → 9` requests) and `fetch_rss_posts` honors `Retry-After`
+  (capped 60s) before falling back to the fixed 10/20/40s backoff. 429s still occur
+  on this datacenter IP but are now **non-fatal**: bounded retries then continue, so
+  the run terminates with usable partial coverage instead of hanging. Reliably
+  eliminating 429 would require Reddit OAuth (`oauth.reddit.com`, 100 req/min), which
+  is out of scope here.
+- Observation (2026-06-16): The fixed scanner completed and ranked the candidate
+  quarters; **Recommended Plan B period: 2026-Q1**.
+  Evidence: `uv run python -m trading_agents.evaluation.reddit_coverage --delay 8`
+  printed:
+  `1. 2026-Q1: posts=176, >=1 coverage=82.0%, >=3 coverage=71.6%, min ticker coverage=50.8%, pairs=6/9`
+  `2. 2025-Q4: posts=31, >=1 coverage=21.9%, >=3 coverage=13.0%, min ticker coverage=0.0%, pairs=3/9`
+  `3. 2025-Q3: posts=0, >=1 coverage=0.0%, >=3 coverage=0.0%, min ticker coverage=0.0%, pairs=0/9`.
+  Caveat: coverage skews to recent quarters because Reddit RSS returns only the 100
+  newest posts per query (`t=year&limit=100`, no pagination), reaching back only to
+  ~Aug 2025; 2025-Q3 is effectively unreachable. The 2026-Q1 recommendation reflects
+  data-availability recency, not necessarily superior historical sentiment depth.
 
 Add new observations here as they arise, with a short evidence snippet (test output
 is ideal).
