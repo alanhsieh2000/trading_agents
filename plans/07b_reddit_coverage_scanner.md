@@ -451,7 +451,7 @@ git commit -m "feat: score reddit coverage by ticker-day"
 - Modify: `pyproject.toml`
 - Test: `tests/test_eval_reddit_coverage.py`
 
-- [ ] **Step 1: Write failing CLI test**
+- [x] **Step 1: Write failing CLI test**
 
 Append to `tests/test_eval_reddit_coverage.py`:
 
@@ -488,7 +488,7 @@ def test_main_prints_ranked_recommendation(monkeypatch, capsys):
     assert "Recommended Plan B period: 2026-Q1" in output
 ```
 
-- [ ] **Step 2: Run CLI test to verify it fails**
+- [x] **Step 2: Run CLI test to verify it fails**
 
 Run:
 
@@ -498,7 +498,7 @@ uv run pytest tests/test_eval_reddit_coverage.py::test_main_prints_ranked_recomm
 
 Expected: failure for missing `fetch_all_posts`, `fetch_trading_days`, or `main`.
 
-- [ ] **Step 3: Implement RSS client and CLI**
+- [x] **Step 3: Implement RSS client and CLI**
 
 Add to `src/trading_agents/evaluation/reddit_coverage.py`:
 
@@ -636,7 +636,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 4: Register console script**
+- [x] **Step 4: Register console script**
 
 In `pyproject.toml`, add under `[project.scripts]`:
 
@@ -646,7 +646,7 @@ scan-reddit-coverage = "trading_agents.evaluation.reddit_coverage:main"
 
 Keep any existing scripts unchanged.
 
-- [ ] **Step 5: Run CLI tests**
+- [x] **Step 5: Run CLI tests**
 
 Run:
 
@@ -656,7 +656,7 @@ uv run pytest tests/test_eval_reddit_coverage.py -q
 
 Expected: all tests pass.
 
-- [ ] **Step 6: Commit Task 3**
+- [x] **Step 6: Commit Task 3**
 
 ```bash
 git add src/trading_agents/evaluation/reddit_coverage.py tests/test_eval_reddit_coverage.py pyproject.toml
