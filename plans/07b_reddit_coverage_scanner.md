@@ -220,7 +220,7 @@ git commit -m "test: add reddit coverage parser"
 - Modify: `src/trading_agents/evaluation/reddit_coverage.py`
 - Test: `tests/test_eval_reddit_coverage.py`
 
-- [ ] **Step 1: Write failing tests for quarter scoring and ranking**
+- [x] **Step 1: Write failing tests for quarter scoring and ranking**
 
 Append to `tests/test_eval_reddit_coverage.py`:
 
@@ -296,7 +296,7 @@ def test_score_candidate_quarters_uses_rolling_lookback_windows():
     ]
 ```
 
-- [ ] **Step 2: Run scoring test to verify it fails**
+- [x] **Step 2: Run scoring test to verify it fails**
 
 Run:
 
@@ -306,7 +306,7 @@ uv run pytest tests/test_eval_reddit_coverage.py::test_score_candidate_quarters_
 
 Expected: import failure for missing `CandidateQuarter`, `CoverageScore`, or `score_candidate_quarters`.
 
-- [ ] **Step 3: Implement scoring**
+- [x] **Step 3: Implement scoring**
 
 Add to `src/trading_agents/evaluation/reddit_coverage.py`:
 
@@ -427,7 +427,7 @@ def _score_one_candidate(
 
 Also move the original `from datetime import date, datetime, timezone` import to include `timedelta`, and combine duplicate imports cleanly.
 
-- [ ] **Step 4: Run scoring tests**
+- [x] **Step 4: Run scoring tests**
 
 Run:
 
@@ -437,7 +437,7 @@ uv run pytest tests/test_eval_reddit_coverage.py -q
 
 Expected: all tests in `test_eval_reddit_coverage.py` pass.
 
-- [ ] **Step 5: Commit Task 2**
+- [x] **Step 5: Commit Task 2**
 
 ```bash
 git add src/trading_agents/evaluation/reddit_coverage.py tests/test_eval_reddit_coverage.py
