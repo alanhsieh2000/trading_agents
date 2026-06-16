@@ -669,7 +669,7 @@ git commit -m "feat: add reddit coverage scanner cli"
 - Modify: `plans/07_evaluation_backtest.md`
 - Test: none
 
-- [ ] **Step 1: Add Plan B selection note to Plan 07**
+- [x] **Step 1: Add Plan B selection note to Plan 07**
 
 In `plans/07_evaluation_backtest.md`, add this to **Decision Log**:
 
@@ -695,7 +695,7 @@ prefer a no-Reddit ablation or continue waiting for Exa historical Reddit access
 instead of pretending the quarter is equivalent to the canonical evaluation.
 ```
 
-- [ ] **Step 2: Run markdown smoke check**
+- [x] **Step 2: Run markdown smoke check**
 
 Run:
 
@@ -711,7 +711,7 @@ PY
 
 Expected: `plan 07 note ok`.
 
-- [ ] **Step 3: Commit Task 4**
+- [x] **Step 3: Commit Task 4**
 
 ```bash
 git add plans/07_evaluation_backtest.md

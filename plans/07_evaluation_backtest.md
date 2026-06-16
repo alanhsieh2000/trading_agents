@@ -180,6 +180,15 @@ is ideal).
   availability statuses.
   Date/Author: 2026-06-15 / Codex
 
+- Decision: Select any Plan B backtest quarter by Reddit ticker-day coverage, not by
+  raw Reddit post count.
+  Rationale: A quarter with many posts for one ticker is not useful if the other
+  evaluation tickers have sparse sentiment evidence. The Plan B scanner ranks
+  2025-Q3, 2025-Q4, and 2026-Q1 by the share of ticker trading days whose 7-day
+  lookback window has at least one Reddit post, then by stricter >=3-post coverage,
+  minimum per-ticker coverage, and total posts.
+  Date/Author: 2026-06-15 / Codex
+
 Record every further decision here, with the reasoning, as the plan evolves.
 
 
@@ -386,6 +395,13 @@ the build is idempotent. Support `--tickers`, `--limit-days`, `--verify-only`, a
 `--scan-periods` checks candidate 61-trading-day windows, such as later 2024 quarters
 and 2025-Q1, and reports whether every required source is available; it must not change
 `EvaluationSettings.start_date` or `end_date`.
+
+Before changing the configured backtest dates for Plan B, run
+`uv run scan-reddit-coverage`. Treat its recommended quarter as the candidate
+Plan B period only if every ticker has nonzero coverage and the coverage table is
+recorded in this plan. If Reddit coverage is concentrated in a single ticker,
+prefer a no-Reddit ablation or continue waiting for Exa historical Reddit access
+instead of pretending the quarter is equivalent to the canonical evaluation.
 
 Fifth, add evaluation tools and the analyst-crew seam. In
 `src/trading_agents/evaluation/eval_tools.py`, define dataset-backed `BaseTool`
