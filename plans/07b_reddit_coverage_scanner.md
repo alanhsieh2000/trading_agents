@@ -257,16 +257,19 @@ def test_score_candidate_quarters_uses_rolling_lookback_windows():
     posts = [
         _post("AAPL", "wallstreetbets", "2026-01-02"),
         _post("GOOGL", "stocks", "2026-01-06"),
+        _post("AMZN", "investing", "2026-01-07"),
         _post("AAPL", "wallstreetbets", "2026-04-01"),
         _post("AAPL", "stocks", "2026-04-04"),
-        _post("GOOGL", "wallstreetbets", "2026-04-06"),
+        _post("GOOGL", "investing", "2026-04-02"),
+        _post("AMZN", "stocks", "2026-04-03"),
+        _post("AMZN", "investing", "2026-04-06"),
     ]
 
     scores = score_candidate_quarters(
         candidates,
         posts,
-        tickers=("AAPL", "GOOGL"),
-        subreddits=("wallstreetbets", "stocks"),
+        tickers=("AAPL", "GOOGL", "AMZN"),
+        subreddits=("wallstreetbets", "stocks", "investing"),
         trading_days_by_quarter=trading_days,
         lookback_days=7,
     )
@@ -274,21 +277,21 @@ def test_score_candidate_quarters_uses_rolling_lookback_windows():
     assert scores == [
         CoverageScore(
             quarter="2026-Q2",
-            total_posts=3,
-            ticker_day_count=6,
-            covered_ticker_days_at_least_1=5,
+            total_posts=5,
+            ticker_day_count=9,
+            covered_ticker_days_at_least_1=9,
             covered_ticker_days_at_least_3=0,
-            min_ticker_coverage_at_least_1=2 / 3,
-            nonzero_ticker_subreddit_pairs=3,
+            min_ticker_coverage_at_least_1=1.0,
+            nonzero_ticker_subreddit_pairs=5,
         ),
         CoverageScore(
             quarter="2026-Q1",
-            total_posts=2,
-            ticker_day_count=6,
-            covered_ticker_days_at_least_1=5,
+            total_posts=3,
+            ticker_day_count=9,
+            covered_ticker_days_at_least_1=6,
             covered_ticker_days_at_least_3=0,
-            min_ticker_coverage_at_least_1=2 / 3,
-            nonzero_ticker_subreddit_pairs=2,
+            min_ticker_coverage_at_least_1=1 / 3,
+            nonzero_ticker_subreddit_pairs=3,
         ),
     ]
 ```
@@ -377,13 +380,14 @@ def _score_one_candidate(
         post
         for post in posts
         if candidate.start_date <= post.published_date <= candidate.end_date
+        and post.ticker in tickers
+        and post.subreddit in subreddits
     ]
     posts_by_ticker: dict[str, list[RedditPost]] = defaultdict(list)
     pairs: set[tuple[str, str]] = set()
     for post in quarter_posts:
         posts_by_ticker[post.ticker].append(post)
-        if post.subreddit in subreddits:
-            pairs.add((post.ticker, post.subreddit))
+        pairs.add((post.ticker, post.subreddit))
 
     covered_1 = 0
     covered_3 = 0
@@ -613,6 +617,7 @@ def main(argv: list[str] | None = None) -> int:
         lookback_days=args.lookback_days,
     )
     print("Plan B Reddit coverage scan")
+    pair_count = len(tickers) * len(subreddits)
     for index, score in enumerate(scores, start=1):
         pct1 = 100 * score.covered_ticker_days_at_least_1 / max(score.ticker_day_count, 1)
         pct3 = 100 * score.covered_ticker_days_at_least_3 / max(score.ticker_day_count, 1)
@@ -620,7 +625,7 @@ def main(argv: list[str] | None = None) -> int:
             f"{index}. {score.quarter}: posts={score.total_posts}, "
             f">=1 coverage={pct1:.1f}%, >=3 coverage={pct3:.1f}%, "
             f"min ticker coverage={100 * score.min_ticker_coverage_at_least_1:.1f}%, "
-            f"pairs={score.nonzero_ticker_subreddit_pairs}/9"
+            f"pairs={score.nonzero_ticker_subreddit_pairs}/{pair_count}"
         )
     if scores:
         print(f"Recommended Plan B period: {scores[0].quarter}")
