@@ -44,8 +44,8 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/dataset.py` (DuckDB-backed `EvalDataset`, `tool_outputs` + `prices` tables, idempotent upserts).
 - [ ] (pending) Create the `build-eval-dataset` entry point with a Reddit-specific availability/status gate in `src/trading_agents/evaluation/build_dataset.py`; this gate belongs to the `fetch_reddit_posts` builder step only and must not block implementation or collection for non-Reddit tools.
 - [x] (2026-06-17 00:00Z) Implemented the shared price-table and trading-day calendar build in `build_dataset.py`: write close prices for the selected evaluation tickers and the default benchmark ticker, SPY, before recording per-tool payloads.
-- [x] (2026-06-17 06:37Z) Implemented shared dataset building for `get_stock_data`: record the market-data text block for each evaluation ticker and for SPY on each trading day using the same lookback window the analyst stage will request; SPY history is required by the portfolio manager's self-reflection and benchmark-relative realized-return calculations.
-- [ ] (pending) Implement dataset building for `get_indicators`: record the indicator text block for each ticker and trading day using the same indicator list and lookback window as the analyst stage.
+- [x] (2026-06-17 06:37Z) Implemented and populated shared dataset building for `get_stock_data`: recorded the market-data text block for each evaluation ticker and for SPY on each trading day using the same lookback window the analyst stage will request; SPY history is required by the portfolio manager's self-reflection and benchmark-relative realized-return calculations. Wrote 244 persistent `get_stock_data` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, SPY 61.
+- [x] (2026-06-17) Implemented and populated dataset building for `get_indicators`: records all allowed indicators from `src/trading_agents/tools/market_data.py` for each configured ticker and trading day using the analyst-stage lookback window. Wrote 183 persistent `get_indicators` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero SPY indicator rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison matched for `AMZN` on `2024-02-27` with 12 indicators.
 - [ ] (pending) Implement dataset building for `get_news`: record ticker-news text through the historical source layer and preserve the live tool's output shape.
 - [ ] (pending) Implement dataset building for `get_global_news`: record global-market-news text through the historical source layer for each trading day.
 - [ ] (pending) Implement dataset building for `fetch_reddit_posts`: record Reddit sentiment text with explicit handling for rate limits, blocked access, empty results, and parse failures. This is the only pending dataset-building step that is gated by source-availability/status verification.
@@ -534,10 +534,17 @@ structured statuses such as `ok`, `empty`, `blocked`, `rate_limited`, `timeout`,
 strings during verification.
 
 After each dataset-building step is coded and validated with the needed focused tests,
-run the corresponding builder for both applicable datasets and summarize exactly what
-was collected. The summary should name the DuckDB file, tool name, tickers, date range,
-trading-day count, row count, and any source warnings. After the user reviews that
-summary, incorporate any feedback before moving to the next dataset source.
+run the corresponding builder and persist the collected rows into every applicable
+DuckDB before marking the step complete. Code-only completion is not sufficient for
+this evaluation plan: the dataset is being built alongside the implementation. The
+summary must be based on read-only queries against the DuckDB files and must name the
+DuckDB file, tool name, tickers, date range, trading-day count, per-tool row count,
+per-ticker row count where applicable, and any source warnings. After the user reviews
+that summary, incorporate any feedback before moving to the next dataset source.
+
+Current data-build reminder: the Plan 07 DuckDB has persistent `get_stock_data` and
+`get_indicators` rows. The benchmark SPY needs `get_stock_data` payloads but does not
+need `get_indicators` payloads.
 
 Before changing the configured backtest dates for Plan B, run
 `uv run scan-reddit-coverage`. Treat its recommended quarter as the candidate

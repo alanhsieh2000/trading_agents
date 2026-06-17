@@ -36,7 +36,7 @@ The concrete result values above are illustrative. The final implementation must
 - [x] (2026-06-16) Added the `build-plan-b-eval-dataset` entry point skeleton and verified it uses Plan B dates and dataset path without taking over the reserved Plan 07 `build-eval-dataset` command; `--verify-only` prints resolved settings and skips DuckDB writes.
 - [x] (2026-06-17 00:00Z) Implemented the shared price-table and trading-day calendar build for Plan B: write close prices for selected tickers and the default benchmark ticker, SPY, into `data/eval_dataset_2026q1.duckdb` before recording per-tool payloads. A live smoke run for `--tickers AAPL --limit-days 3` wrote 92 AAPL rows and 92 SPY rows and derived transaction days `2026-01-02..2026-01-06`.
 - [x] (2026-06-17 06:37Z) Implemented Plan B dataset building for `get_stock_data` through the shared Plan 07 builder path: record the market-data text block for AAPL, GOOGL, AMZN, and SPY on each trading day using the same lookback window the analyst stage will request; SPY history is required by the portfolio manager's self-reflection and benchmark-relative realized-return calculations.
-- [ ] (pending) Implement Plan B dataset building for `get_indicators`: record the indicator text block for each ticker and trading day using the same indicator list and lookback window as the analyst stage.
+- [x] (2026-06-17) Implemented and populated Plan B dataset building for `get_indicators` through the shared Plan 07 builder path: records all allowed indicators from `src/trading_agents/tools/market_data.py` for each configured ticker and trading day using the analyst-stage lookback window. Wrote 183 persistent `get_indicators` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero SPY indicator rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison matched for `AMZN` on `2026-02-27` with 12 indicators.
 - [ ] (pending) Implement Plan B dataset building for `get_news`: record ticker-news text through the historical source layer and preserve the live tool's output shape.
 - [ ] (pending) Implement Plan B dataset building for `get_global_news`: record global-market-news text through the historical source layer for each trading day.
 - [ ] (pending) Implement Plan B dataset building for `fetch_reddit_posts`: record Reddit sentiment text for the chosen 2026-Q1 period using the fixed Reddit RSS/request-volume handling, with explicit handling for rate limits, blocked access, empty results, and parse failures.
@@ -236,11 +236,19 @@ wherever the evaluation may need benchmark history.
 Treat the ten analyst data tools as ten separate builder sub-tasks, not as one monolith. Implement and validate `get_stock_data`, `get_indicators`, `get_news`, `get_global_news`, `fetch_reddit_posts`, `fetch_stocktwits_messages`, `get_fundamentals`, `get_balance_sheet`, `get_cashflow`, and `get_income_statement` one by one. If a source exposes a new failure mode while its payloads are being recorded, stop and resolve that source-specific issue before moving to the next tool. This is especially important for Reddit. The Plan B scanner in `plans/07b_reddit_coverage_scanner.md` found that Reddit HTTP 429s were caused by too many unauthenticated RSS requests from a cloud/datacenter IP, not a total IP block. A single request could return HTTP 200, but `3 tickers × 3 subreddits × 3 aliases = 27` requests exceeded Reddit's tight shared budget. The scanner fix OR-joined aliases into one query per `(ticker, subreddit)`, reducing volume from 27 requests to 9, and made 429s bounded and non-fatal by honoring `Retry-After` before falling back to fixed backoff. The scanner completed with `--delay 8`; the dataset builder should use at least 10 seconds between Reddit RSS requests to include a 2-second buffer. Reuse that lesson for any Reddit dataset ingestion path: minimize request volume, preserve structured statuses such as `ok`, `empty`, `blocked`, `rate_limited`, `timeout`, and `parse_error`, and never collapse access failures into ordinary "No data available" strings during verification.
 
 After each dataset-building step is coded and validated with the needed focused tests,
-run the corresponding builder for Plan B, and for Plan 07 too when the source applies to
-both datasets. Summarize exactly what was collected before moving on: DuckDB file, tool
-name, tickers, covered date range, trading-day count, row count, and any source warnings.
-Wait for user feedback on that summary if the collected slice reveals degraded or
-surprising data.
+run the corresponding builder and persist the collected rows into every applicable
+DuckDB before marking the step complete. Code-only completion is not sufficient for
+this evaluation plan: the dataset is being built alongside the implementation. For
+shared sources, populate Plan B and Plan 07 unless the source is explicitly
+Plan-B-only. The summary must be based on read-only queries against the DuckDB files
+and must name the DuckDB file, tool name, tickers, covered date range, trading-day
+count, per-tool row count, per-ticker row count where applicable, and any source
+warnings. Wait for user feedback on that summary if the collected slice reveals
+degraded or surprising data.
+
+Current data-build reminder: Plan B and Plan 07 both have persistent `get_stock_data`
+and `get_indicators` rows. The benchmark SPY needs `get_stock_data` payloads but does
+not need `get_indicators` payloads.
 
 Fourth, run the Plan B evaluator against `data/eval_dataset_2026q1.duckdb`. The runner must iterate transaction days chronologically because portfolio lessons accumulate over time. It must run every ticker on every transaction day and write reports under `output/eval/` or an equivalent isolated evaluation output directory.
 

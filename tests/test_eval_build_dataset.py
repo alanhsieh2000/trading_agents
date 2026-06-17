@@ -175,6 +175,61 @@ def test_build_stock_data_outputs_writes_tickers_and_benchmark(monkeypatch, tmp_
     assert spy_payload == "SPY 2025-11-30 2025-12-03"
 
 
+def test_indicator_names_for_dataset_collects_all_allowed_indicators():
+    assert build_dataset.indicator_names_for_dataset() == tuple(
+        sorted(build_dataset.ALLOWED_INDICATORS)
+    )
+
+
+def test_build_indicator_outputs_writes_tickers_only_with_all_indicators(
+    monkeypatch, tmp_path
+):
+    calls = []
+
+    def fake_get_indicators_text(ticker, start_date, end_date, indicators):
+        calls.append((ticker, start_date, end_date, tuple(indicators)))
+        return f"{ticker} {start_date} {end_date} {len(indicators)}"
+
+    monkeypatch.setattr(
+        build_dataset, "get_indicators_text", fake_get_indicators_text
+    )
+    options = build_dataset.BuildDatasetOptions(
+        dataset_path=str(tmp_path / "eval.duckdb"),
+        tickers=("AAPL", "AAPL", "GOOGL"),
+        benchmark="SPY",
+        start_date="2025-12-02",
+        end_date="2025-12-04",
+        buffer_start_date="2025-12-01",
+        price_tail_days=2,
+        lookback_days=3,
+        weight_over=0.5,
+        weight_under=0.5,
+        limit_days=None,
+        verify_only=False,
+    )
+
+    with EvalDataset(options.dataset_path) as dataset:
+        result = build_dataset.build_indicator_outputs(
+            options, dataset, ["2025-12-02", "2025-12-03"]
+        )
+        aapl_payload = dataset.tool_output("get_indicators", "AAPL", "2025-12-02")
+        googl_payload = dataset.tool_output("get_indicators", "GOOGL", "2025-12-03")
+
+    all_indicators = build_dataset.indicator_names_for_dataset()
+    assert calls == [
+        ("AAPL", "2025-11-29", "2025-12-02", all_indicators),
+        ("AAPL", "2025-11-30", "2025-12-03", all_indicators),
+        ("GOOGL", "2025-11-29", "2025-12-02", all_indicators),
+        ("GOOGL", "2025-11-30", "2025-12-03", all_indicators),
+    ]
+    assert result.tool_name == "get_indicators"
+    assert result.symbols == ("AAPL", "GOOGL")
+    assert result.payloads_written == 4
+    assert result.lookback_days == 3
+    assert aapl_payload == f"AAPL 2025-11-29 2025-12-02 {len(all_indicators)}"
+    assert googl_payload == f"GOOGL 2025-11-30 2025-12-03 {len(all_indicators)}"
+
+
 def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
     dataset_path = tmp_path / "eval_dataset_2026q1.duckdb"
     monkeypatch.setattr(build_dataset, "PLAN_B_DATASET_PATH", str(dataset_path))
@@ -188,6 +243,13 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
         "get_stock_data_text",
         lambda ticker, start_date, end_date: f"{ticker} {start_date} {end_date}",
     )
+    monkeypatch.setattr(
+        build_dataset,
+        "get_indicators_text",
+        lambda ticker, start_date, end_date, indicators: (
+            f"{ticker} {start_date} {end_date} {len(indicators)}"
+        ),
+    )
 
     exit_code = build_dataset.plan_b_main(["--tickers", "AAPL", "--limit-days", "2"])
 
@@ -198,10 +260,13 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
     assert "window: 2026-01-01..2026-03-31" in output
     assert "Price table built" in output
     assert "get_stock_data outputs built" in output
+    assert "get_indicators outputs built" in output
     assert "payloads_written: 4" in output
+    assert "payloads_written: 2" in output
     assert "remaining tool-output builders: pending" in output
     with EvalDataset(dataset_path, read_only=True) as dataset:
         assert dataset.close_series("AAPL")
         assert dataset.close_series("SPY")
         assert dataset.tool_output("get_stock_data", "AAPL", "2026-01-02")
         assert dataset.tool_output("get_stock_data", "SPY", "2026-01-03")
+        assert dataset.tool_output("get_indicators", "AAPL", "2026-01-02")

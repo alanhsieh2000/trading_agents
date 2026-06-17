@@ -19,7 +19,9 @@ import yfinance as yf
 from trading_agents.config import get_settings
 from trading_agents.evaluation.dataset import EvalDataset
 from trading_agents.tools.market_data import (
+    ALLOWED_INDICATORS,
     _normalise_price_history,
+    get_indicators_text,
     get_stock_data_text,
 )
 
@@ -68,6 +70,7 @@ class ToolOutputBuildResult:
 class DatasetBuildResult:
     price_result: PriceBuildResult
     stock_data_result: ToolOutputBuildResult
+    indicators_result: ToolOutputBuildResult
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -266,6 +269,44 @@ def build_stock_data_outputs(
     )
 
 
+def _symbols_for_indicator_outputs(options: BuildDatasetOptions) -> tuple[str, ...]:
+    """Return evaluated tickers that need replayable indicator payloads."""
+    return tuple(
+        dict.fromkeys(ticker.upper().strip() for ticker in options.tickers if ticker)
+    )
+
+
+def indicator_names_for_dataset() -> tuple[str, ...]:
+    """Return the complete allowed indicator set in deterministic order."""
+    return tuple(sorted(ALLOWED_INDICATORS))
+
+
+def build_indicator_outputs(
+    options: BuildDatasetOptions,
+    dataset: EvalDataset,
+    transaction_days: Sequence[str],
+) -> ToolOutputBuildResult:
+    """Record replayable ``get_indicators`` payloads for each ticker and day."""
+    symbols = _symbols_for_indicator_outputs(options)
+    indicators = indicator_names_for_dataset()
+    payloads_written = 0
+
+    for symbol in symbols:
+        for as_of_date in transaction_days:
+            start_date = _lookback_start_date(as_of_date, options.lookback_days)
+            payload = get_indicators_text(symbol, start_date, as_of_date, indicators)
+            dataset.put_tool_output("get_indicators", symbol, as_of_date, payload)
+            payloads_written += 1
+
+    return ToolOutputBuildResult(
+        tool_name="get_indicators",
+        symbols=symbols,
+        payloads_written=payloads_written,
+        transaction_days=tuple(transaction_days),
+        lookback_days=options.lookback_days,
+    )
+
+
 def build_dataset(options: BuildDatasetOptions) -> DatasetBuildResult:
     """Build the currently implemented shared dataset pieces."""
     with EvalDataset(options.dataset_path) as dataset:
@@ -273,9 +314,13 @@ def build_dataset(options: BuildDatasetOptions) -> DatasetBuildResult:
         stock_data_result = build_stock_data_outputs(
             options, dataset, price_result.transaction_days
         )
+        indicators_result = build_indicator_outputs(
+            options, dataset, price_result.transaction_days
+        )
         return DatasetBuildResult(
             price_result=price_result,
             stock_data_result=stock_data_result,
+            indicators_result=indicators_result,
         )
 
 
@@ -318,6 +363,7 @@ def render_dataset_result(result: DatasetBuildResult) -> str:
         [
             render_price_result(result.price_result),
             render_tool_output_result(result.stock_data_result),
+            render_tool_output_result(result.indicators_result),
             "remaining tool-output builders: pending",
         ]
     )
