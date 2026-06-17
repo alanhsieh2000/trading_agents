@@ -38,7 +38,7 @@ The concrete result values above are illustrative. The final implementation must
 - [x] (2026-06-17 06:37Z) Implemented Plan B dataset building for `get_stock_data` through the shared Plan 07 builder path: record the market-data text block for AAPL, GOOGL, AMZN, and SPY on each trading day using the same lookback window the analyst stage will request; SPY history is required by the portfolio manager's self-reflection and benchmark-relative realized-return calculations.
 - [x] (2026-06-17) Implemented and populated Plan B dataset building for `get_indicators` through the shared Plan 07 builder path: records all allowed indicators from `src/trading_agents/tools/market_data.py` for each configured ticker and trading day using the analyst-stage lookback window. Wrote 183 persistent `get_indicators` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero SPY indicator rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison matched for `AMZN` on `2026-02-27` with 12 indicators.
 - [x] (2026-06-17 13:03Z) Implemented and populated Plan B dataset building for `get_news` through the shared Plan 07 builder path: records ticker-news text through the Exa historical source layer with the same markdown/no-news/error contract as the live Yahoo-backed tool. The builder uses a doubled news limit (`settings.news.ticker_limit * 2`, currently 40) for buffer coverage and writes ticker rows only. Wrote 183 persistent `get_news` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`.
-- [ ] (pending) Implement Plan B dataset building for `get_global_news`: record global-market-news text through the historical source layer for each trading day.
+- [x] (2026-06-17) Implemented and populated Plan B dataset building for `get_global_news` through the shared Plan 07 builder path: records one Exa historical global-market-news payload per trading day, stores it under each evaluated ticker key for existing dataset-backed tool replay, and uses a doubled global-news limit (`settings.news.global_limit * 2`, currently 20). Wrote 183 persistent `get_global_news` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Source warning: Exa returned HTTP 402 credit-limit errors after 52 successful days, so 27 rows across 9 dates currently contain explicit `Error fetching global news ... exceeded your credits limit` payloads; zero rows use the no-news fallback. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2026-01-16`; the evaluation-backed `get_global_news` tool matched the DuckDB payload exactly and returned the shared global payload for all ticker keys on that date.
 - [ ] (pending) Implement Plan B dataset building for `fetch_reddit_posts`: record Reddit sentiment text for the chosen 2026-Q1 period using the fixed Reddit RSS/request-volume handling, with explicit handling for rate limits, blocked access, empty results, and parse failures.
 - [ ] (pending) Implement Plan B dataset building for `fetch_stocktwits_messages`: record StockTwits sentiment text and distinguish empty results from source access failures where possible.
 - [ ] (pending) Implement Plan B dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
@@ -75,6 +75,21 @@ Use timestamps, for example `(2026-06-16 09:00Z)`, when checking items off so a 
   `exa_py/api.py:requests.post(...).getresponse()`. The fix wraps the SDK's internal
   requests functions with a 20-second default timeout and records per-row
   `Error fetching news for ...` payloads if a historical news fetch fails.
+- Observation (2026-06-17): The first timeout wrapper still allowed indefinite waits
+  when the Exa SDK passed `timeout=None`, because `dict.setdefault()` did not override
+  the explicit `None`.
+  Evidence: an interrupted `get_global_news` ingestion was blocked inside
+  `requests.post(... timeout=None ...)`; the wrapper now replaces `None` with the
+  20-second default, and `tests/test_eval_exa_sources.py::test_exa_timeout_patch_overrides_explicit_none`
+  covers the regression.
+- Observation (2026-06-17): The Plan B `get_global_news` population is degraded by
+  Exa quota exhaustion, not by missing code or missing DuckDB rows.
+  Evidence: read-only DuckDB queries found 183 `get_global_news` rows in
+  `data/eval_dataset_2026q1.duckdb`, but 27 rows across 9 dates contain HTTP 402
+  `You have exceeded your credits limit` payloads from Exa. The failed Plan B
+  dates to retry in July after monthly Exa credits reset are: `2026-02-18`,
+  `2026-02-19`, `2026-03-11`, `2026-03-12`, `2026-03-16`, `2026-03-17`,
+  `2026-03-20`, `2026-03-24`, and `2026-03-26`.
 
 Add new observations here as they arise, with a short evidence snippet. Test output is ideal.
 

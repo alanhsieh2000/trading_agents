@@ -201,20 +201,24 @@ def _exa_request_timeout_patch() -> Any:
     original_patch = exa_api.requests.patch
     original_delete = exa_api.requests.delete
 
+    def _ensure_timeout(kwargs: dict[str, Any]) -> None:
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = EXA_REQUEST_TIMEOUT_SECONDS
+
     def get_with_timeout(*args: Any, **kwargs: Any) -> Any:
-        kwargs.setdefault("timeout", EXA_REQUEST_TIMEOUT_SECONDS)
+        _ensure_timeout(kwargs)
         return original_get(*args, **kwargs)
 
     def post_with_timeout(*args: Any, **kwargs: Any) -> Any:
-        kwargs.setdefault("timeout", EXA_REQUEST_TIMEOUT_SECONDS)
+        _ensure_timeout(kwargs)
         return original_post(*args, **kwargs)
 
     def patch_with_timeout(*args: Any, **kwargs: Any) -> Any:
-        kwargs.setdefault("timeout", EXA_REQUEST_TIMEOUT_SECONDS)
+        _ensure_timeout(kwargs)
         return original_patch(*args, **kwargs)
 
     def delete_with_timeout(*args: Any, **kwargs: Any) -> Any:
-        kwargs.setdefault("timeout", EXA_REQUEST_TIMEOUT_SECONDS)
+        _ensure_timeout(kwargs)
         return original_delete(*args, **kwargs)
 
     exa_api.requests.get = get_with_timeout

@@ -84,6 +84,21 @@ def test_fetch_global_news_via_exa_computes_lookback_window(fake_exa):
     assert "## Global Market News, from 2024-01-03 to 2024-01-10:" in result
 
 
+def test_exa_timeout_patch_overrides_explicit_none(monkeypatch):
+    observed = {}
+
+    def fake_post(*args, **kwargs):
+        observed["timeout"] = kwargs.get("timeout")
+        return object()
+
+    monkeypatch.setattr(exa_sources.exa_api.requests, "post", fake_post)
+
+    with exa_sources._exa_request_timeout_patch():
+        exa_sources.exa_api.requests.post("https://example.com", timeout=None)
+
+    assert observed["timeout"] == exa_sources.EXA_REQUEST_TIMEOUT_SECONDS
+
+
 def test_fetch_reddit_via_exa_uses_reddit_domain_and_formats_posts(fake_exa):
     fake_exa.results = [
         FakeResult(

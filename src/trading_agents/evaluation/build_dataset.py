@@ -18,7 +18,10 @@ import yfinance as yf
 
 from trading_agents.config import get_settings
 from trading_agents.evaluation.dataset import EvalDataset
-from trading_agents.evaluation.exa_sources import fetch_news_via_exa
+from trading_agents.evaluation.exa_sources import (
+    fetch_global_news_via_exa,
+    fetch_news_via_exa,
+)
 from trading_agents.tools.market_data import (
     ALLOWED_INDICATORS,
     _normalise_price_history,
@@ -48,6 +51,8 @@ class BuildDatasetOptions:
     limit_days: int | None
     verify_only: bool
     news_limit: int = 40
+    global_news_limit: int = 20
+    global_news_lookback_days: int = 7
 
 
 @dataclass(frozen=True)
@@ -74,6 +79,7 @@ class DatasetBuildResult:
     stock_data_result: ToolOutputBuildResult
     indicators_result: ToolOutputBuildResult
     news_result: ToolOutputBuildResult
+    global_news_result: ToolOutputBuildResult
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -124,6 +130,8 @@ def options_from_settings(
         limit_days=args.limit_days,
         verify_only=bool(args.verify_only),
         news_limit=settings.news.ticker_limit * 2,
+        global_news_limit=settings.news.global_limit * 2,
+        global_news_lookback_days=settings.news.global_lookback_days,
     )
 
 
@@ -143,6 +151,8 @@ def render_options(options: BuildDatasetOptions) -> str:
             f"weight_under: {options.weight_under}",
             f"limit_days: {limit_days}",
             f"news_limit: {options.news_limit}",
+            f"global_news_limit: {options.global_news_limit}",
+            f"global_news_lookback_days: {options.global_news_lookback_days}",
         ]
     )
 
@@ -345,6 +355,37 @@ def build_news_outputs(
     )
 
 
+def build_global_news_outputs(
+    options: BuildDatasetOptions,
+    dataset: EvalDataset,
+    transaction_days: Sequence[str],
+) -> ToolOutputBuildResult:
+    """Record replayable ``get_global_news`` payloads for each ticker and day."""
+    symbols = _symbols_for_indicator_outputs(options)
+    payloads_written = 0
+
+    for as_of_date in transaction_days:
+        try:
+            payload = fetch_global_news_via_exa(
+                curr_date=as_of_date,
+                look_back_days=options.global_news_lookback_days,
+                limit=options.global_news_limit,
+            )
+        except Exception as exc:
+            payload = f"Error fetching global news for {as_of_date}: {exc}"
+        for symbol in symbols:
+            dataset.put_tool_output("get_global_news", symbol, as_of_date, payload)
+            payloads_written += 1
+
+    return ToolOutputBuildResult(
+        tool_name="get_global_news",
+        symbols=symbols,
+        payloads_written=payloads_written,
+        transaction_days=tuple(transaction_days),
+        lookback_days=options.global_news_lookback_days,
+    )
+
+
 def build_dataset(options: BuildDatasetOptions) -> DatasetBuildResult:
     """Build the currently implemented shared dataset pieces."""
     with EvalDataset(options.dataset_path) as dataset:
@@ -356,11 +397,15 @@ def build_dataset(options: BuildDatasetOptions) -> DatasetBuildResult:
             options, dataset, price_result.transaction_days
         )
         news_result = build_news_outputs(options, dataset, price_result.transaction_days)
+        global_news_result = build_global_news_outputs(
+            options, dataset, price_result.transaction_days
+        )
         return DatasetBuildResult(
             price_result=price_result,
             stock_data_result=stock_data_result,
             indicators_result=indicators_result,
             news_result=news_result,
+            global_news_result=global_news_result,
         )
 
 
@@ -405,6 +450,7 @@ def render_dataset_result(result: DatasetBuildResult) -> str:
             render_tool_output_result(result.stock_data_result),
             render_tool_output_result(result.indicators_result),
             render_tool_output_result(result.news_result),
+            render_tool_output_result(result.global_news_result),
             "remaining tool-output builders: pending",
         ]
     )

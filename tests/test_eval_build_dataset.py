@@ -30,6 +30,8 @@ def test_options_use_plan_07_defaults():
     assert options.buffer_start_date == "2023-12-01"
     assert options.lookback_days == 7
     assert options.news_limit == 40
+    assert options.global_news_limit == 20
+    assert options.global_news_lookback_days == 7
     assert options.verify_only is True
 
 
@@ -305,6 +307,88 @@ def test_build_news_outputs_records_fetch_errors(monkeypatch, tmp_path):
     assert payload == "Error fetching news for AAPL: source timed out"
 
 
+def test_build_global_news_outputs_writes_ticker_rows_with_doubled_limit(
+    monkeypatch, tmp_path
+):
+    calls = []
+
+    def fake_fetch_global_news_via_exa(curr_date, look_back_days, limit):
+        calls.append((curr_date, look_back_days, limit))
+        return f"global news {curr_date} {look_back_days} {limit}"
+
+    monkeypatch.setattr(
+        build_dataset, "fetch_global_news_via_exa", fake_fetch_global_news_via_exa
+    )
+    options = build_dataset.BuildDatasetOptions(
+        dataset_path=str(tmp_path / "eval.duckdb"),
+        tickers=("AAPL", "AAPL", "GOOGL"),
+        benchmark="SPY",
+        start_date="2025-12-02",
+        end_date="2025-12-04",
+        buffer_start_date="2025-12-01",
+        price_tail_days=2,
+        lookback_days=3,
+        weight_over=0.5,
+        weight_under=0.5,
+        limit_days=None,
+        verify_only=False,
+        global_news_limit=14,
+        global_news_lookback_days=5,
+    )
+
+    with EvalDataset(options.dataset_path) as dataset:
+        result = build_dataset.build_global_news_outputs(
+            options, dataset, ["2025-12-02", "2025-12-03"]
+        )
+        aapl_payload = dataset.tool_output("get_global_news", "AAPL", "2025-12-02")
+        googl_payload = dataset.tool_output("get_global_news", "GOOGL", "2025-12-03")
+
+    assert calls == [
+        ("2025-12-02", 5, 14),
+        ("2025-12-03", 5, 14),
+    ]
+    assert result.tool_name == "get_global_news"
+    assert result.symbols == ("AAPL", "GOOGL")
+    assert result.payloads_written == 4
+    assert result.lookback_days == 5
+    assert aapl_payload == "global news 2025-12-02 5 14"
+    assert googl_payload == "global news 2025-12-03 5 14"
+
+
+def test_build_global_news_outputs_records_fetch_errors(monkeypatch, tmp_path):
+    def fake_fetch_global_news_via_exa(curr_date, look_back_days, limit):
+        raise TimeoutError("global source timed out")
+
+    monkeypatch.setattr(
+        build_dataset, "fetch_global_news_via_exa", fake_fetch_global_news_via_exa
+    )
+    options = build_dataset.BuildDatasetOptions(
+        dataset_path=str(tmp_path / "eval.duckdb"),
+        tickers=("AAPL", "GOOGL"),
+        benchmark="SPY",
+        start_date="2025-12-02",
+        end_date="2025-12-02",
+        buffer_start_date="2025-12-01",
+        price_tail_days=2,
+        lookback_days=3,
+        weight_over=0.5,
+        weight_under=0.5,
+        limit_days=None,
+        verify_only=False,
+        global_news_limit=14,
+        global_news_lookback_days=5,
+    )
+
+    with EvalDataset(options.dataset_path) as dataset:
+        result = build_dataset.build_global_news_outputs(options, dataset, ["2025-12-02"])
+        aapl_payload = dataset.tool_output("get_global_news", "AAPL", "2025-12-02")
+        googl_payload = dataset.tool_output("get_global_news", "GOOGL", "2025-12-02")
+
+    assert result.payloads_written == 2
+    assert aapl_payload == "Error fetching global news for 2025-12-02: global source timed out"
+    assert googl_payload == aapl_payload
+
+
 def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
     dataset_path = tmp_path / "eval_dataset_2026q1.duckdb"
     monkeypatch.setattr(build_dataset, "PLAN_B_DATASET_PATH", str(dataset_path))
@@ -332,6 +416,13 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
             f"{ticker} news {start_date} {end_date} {limit}"
         ),
     )
+    monkeypatch.setattr(
+        build_dataset,
+        "fetch_global_news_via_exa",
+        lambda curr_date, look_back_days, limit: (
+            f"global news {curr_date} {look_back_days} {limit}"
+        ),
+    )
 
     exit_code = build_dataset.plan_b_main(["--tickers", "AAPL", "--limit-days", "2"])
 
@@ -344,6 +435,7 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
     assert "get_stock_data outputs built" in output
     assert "get_indicators outputs built" in output
     assert "get_news outputs built" in output
+    assert "get_global_news outputs built" in output
     assert "payloads_written: 4" in output
     assert "payloads_written: 2" in output
     assert "remaining tool-output builders: pending" in output
@@ -354,3 +446,4 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
         assert dataset.tool_output("get_stock_data", "SPY", "2026-01-03")
         assert dataset.tool_output("get_indicators", "AAPL", "2026-01-02")
         assert dataset.tool_output("get_news", "AAPL", "2026-01-02")
+        assert dataset.tool_output("get_global_news", "AAPL", "2026-01-02")
