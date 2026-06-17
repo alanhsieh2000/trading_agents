@@ -18,7 +18,10 @@ import yfinance as yf
 
 from trading_agents.config import get_settings
 from trading_agents.evaluation.dataset import EvalDataset
-from trading_agents.tools.market_data import _normalise_price_history
+from trading_agents.tools.market_data import (
+    _normalise_price_history,
+    get_stock_data_text,
+)
 
 
 PLAN_B_START_DATE = "2026-01-01"
@@ -36,6 +39,7 @@ class BuildDatasetOptions:
     end_date: str
     buffer_start_date: str
     price_tail_days: int
+    lookback_days: int
     weight_over: float
     weight_under: float
     limit_days: int | None
@@ -49,6 +53,21 @@ class PriceBuildResult:
     transaction_days: tuple[str, ...]
     fetch_start_date: str
     fetch_end_date: str
+
+
+@dataclass(frozen=True)
+class ToolOutputBuildResult:
+    tool_name: str
+    symbols: tuple[str, ...]
+    payloads_written: int
+    transaction_days: tuple[str, ...]
+    lookback_days: int
+
+
+@dataclass(frozen=True)
+class DatasetBuildResult:
+    price_result: PriceBuildResult
+    stock_data_result: ToolOutputBuildResult
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -76,7 +95,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def options_from_settings(
     args: argparse.Namespace, *, plan_b_defaults: bool = False
 ) -> BuildDatasetOptions:
-    evaluation = get_settings().evaluation
+    settings = get_settings()
+    evaluation = settings.evaluation
     tickers = tuple(ticker.upper() for ticker in (args.tickers or evaluation.tickers))
     dataset_path = PLAN_B_DATASET_PATH if plan_b_defaults else evaluation.dataset_path
     start_date = PLAN_B_START_DATE if plan_b_defaults else evaluation.start_date
@@ -92,6 +112,7 @@ def options_from_settings(
         end_date=end_date,
         buffer_start_date=buffer_start_date,
         price_tail_days=evaluation.price_tail_days,
+        lookback_days=settings.analyst_stage.lookback_days,
         weight_over=evaluation.weight_over,
         weight_under=evaluation.weight_under,
         limit_days=args.limit_days,
@@ -110,6 +131,7 @@ def render_options(options: BuildDatasetOptions) -> str:
             f"window: {options.start_date}..{options.end_date}",
             f"buffer_start_date: {options.buffer_start_date}",
             f"price_tail_days: {options.price_tail_days}",
+            f"lookback_days: {options.lookback_days}",
             f"weight_over: {options.weight_over}",
             f"weight_under: {options.weight_under}",
             f"limit_days: {limit_days}",
@@ -137,7 +159,9 @@ def _symbols_for_prices(options: BuildDatasetOptions) -> tuple[str, ...]:
     return tuple(symbols)
 
 
-def _download_close_rows(symbol: str, start_date: str, end_date: str) -> list[tuple[str, float]]:
+def _download_close_rows(
+    symbol: str, start_date: str, end_date: str
+) -> list[tuple[str, float]]:
     try:
         history = yf.download(
             symbol,
@@ -213,10 +237,46 @@ def build_price_table(options: BuildDatasetOptions, dataset: EvalDataset) -> Pri
     )
 
 
-def build_dataset(options: BuildDatasetOptions) -> PriceBuildResult:
+def _lookback_start_date(as_of_date: str, lookback_days: int) -> str:
+    return (_parse_date(as_of_date) - timedelta(days=lookback_days)).isoformat()
+
+
+def build_stock_data_outputs(
+    options: BuildDatasetOptions,
+    dataset: EvalDataset,
+    transaction_days: Sequence[str],
+) -> ToolOutputBuildResult:
+    """Record replayable ``get_stock_data`` payloads for each symbol and day."""
+    symbols = _symbols_for_prices(options)
+    payloads_written = 0
+
+    for symbol in symbols:
+        for as_of_date in transaction_days:
+            start_date = _lookback_start_date(as_of_date, options.lookback_days)
+            payload = get_stock_data_text(symbol, start_date, as_of_date)
+            dataset.put_tool_output("get_stock_data", symbol, as_of_date, payload)
+            payloads_written += 1
+
+    return ToolOutputBuildResult(
+        tool_name="get_stock_data",
+        symbols=symbols,
+        payloads_written=payloads_written,
+        transaction_days=tuple(transaction_days),
+        lookback_days=options.lookback_days,
+    )
+
+
+def build_dataset(options: BuildDatasetOptions) -> DatasetBuildResult:
     """Build the currently implemented shared dataset pieces."""
     with EvalDataset(options.dataset_path) as dataset:
-        return build_price_table(options, dataset)
+        price_result = build_price_table(options, dataset)
+        stock_data_result = build_stock_data_outputs(
+            options, dataset, price_result.transaction_days
+        )
+        return DatasetBuildResult(
+            price_result=price_result,
+            stock_data_result=stock_data_result,
+        )
 
 
 def render_price_result(result: PriceBuildResult) -> str:
@@ -232,10 +292,35 @@ def render_price_result(result: PriceBuildResult) -> str:
             f"transaction_days: {len(result.transaction_days)}",
             f"first_transaction_day: {result.transaction_days[0]}",
             f"last_transaction_day: {result.transaction_days[-1]}",
-            "tool-output builders: pending",
         ]
     )
     return "\n".join(lines)
+
+
+def render_tool_output_result(result: ToolOutputBuildResult) -> str:
+    first_day = result.transaction_days[0] if result.transaction_days else "n/a"
+    last_day = result.transaction_days[-1] if result.transaction_days else "n/a"
+    return "\n".join(
+        [
+            f"{result.tool_name} outputs built",
+            f"symbols: {', '.join(result.symbols)}",
+            f"payloads_written: {result.payloads_written}",
+            f"transaction_days: {len(result.transaction_days)}",
+            f"first_transaction_day: {first_day}",
+            f"last_transaction_day: {last_day}",
+            f"lookback_days: {result.lookback_days}",
+        ]
+    )
+
+
+def render_dataset_result(result: DatasetBuildResult) -> str:
+    return "\n".join(
+        [
+            render_price_result(result.price_result),
+            render_tool_output_result(result.stock_data_result),
+            "remaining tool-output builders: pending",
+        ]
+    )
 
 
 def _run(argv: Sequence[str] | None, *, plan_b_defaults: bool) -> int:
@@ -246,7 +331,7 @@ def _run(argv: Sequence[str] | None, *, plan_b_defaults: bool) -> int:
         print("verify-only: dataset writes skipped")
         return 0
     result = build_dataset(options)
-    print(render_price_result(result))
+    print(render_dataset_result(result))
     return 0
 
 

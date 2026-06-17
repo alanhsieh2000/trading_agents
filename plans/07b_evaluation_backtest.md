@@ -35,7 +35,7 @@ The concrete result values above are illustrative. The final implementation must
 - [x] (2026-06-16) Verified the 2026-Q1 trading calendar with yfinance: SPY, AAPL, GOOGL, and AMZN each have 61 rows from 2026-01-02 through 2026-03-31 for the inclusive Plan B window `2026-01-01..2026-03-31`.
 - [x] (2026-06-16) Added the `build-plan-b-eval-dataset` entry point skeleton and verified it uses Plan B dates and dataset path without taking over the reserved Plan 07 `build-eval-dataset` command; `--verify-only` prints resolved settings and skips DuckDB writes.
 - [x] (2026-06-17 00:00Z) Implemented the shared price-table and trading-day calendar build for Plan B: write close prices for selected tickers and the default benchmark ticker, SPY, into `data/eval_dataset_2026q1.duckdb` before recording per-tool payloads. A live smoke run for `--tickers AAPL --limit-days 3` wrote 92 AAPL rows and 92 SPY rows and derived transaction days `2026-01-02..2026-01-06`.
-- [ ] (pending) Implement Plan B dataset building for `get_stock_data`: record the market-data text block for AAPL, GOOGL, AMZN, and SPY on each trading day using the same lookback window the analyst stage will request; SPY history is required by the portfolio manager's self-reflection and benchmark-relative realized-return calculations.
+- [x] (2026-06-17 06:37Z) Implemented Plan B dataset building for `get_stock_data` through the shared Plan 07 builder path: record the market-data text block for AAPL, GOOGL, AMZN, and SPY on each trading day using the same lookback window the analyst stage will request; SPY history is required by the portfolio manager's self-reflection and benchmark-relative realized-return calculations.
 - [ ] (pending) Implement Plan B dataset building for `get_indicators`: record the indicator text block for each ticker and trading day using the same indicator list and lookback window as the analyst stage.
 - [ ] (pending) Implement Plan B dataset building for `get_news`: record ticker-news text through the historical source layer and preserve the live tool's output shape.
 - [ ] (pending) Implement Plan B dataset building for `get_global_news`: record global-market-news text through the historical source layer for each trading day.
@@ -154,6 +154,22 @@ write phase that Plan B shares with Plan 07:
 Analyst tool-output recording and evaluation runs remain pending. Plan B has no
 source-availability gate; Reddit collection should use the fixed 2026-Q1 RSS path and
 preserve source statuses in the collected payload summary.
+
+Milestone 2 — Shared `get_stock_data` tool-output builder (2026-06-17). Added the
+first analyst tool-output writer that Plan B shares with Plan 07:
+
+- `build_stock_data_outputs()` writes replayable `get_stock_data` payloads for each
+  selected ticker plus SPY on each SPY-derived transaction day.
+- The builder calls the existing `get_stock_data_text()` renderer with
+  `start_date = as_of_date - settings.analyst_stage.lookback_days` and
+  `end_date = as_of_date`, matching the analyst stage's default seven-day lookback.
+- The Plan B command now reports the stock-data payload count after the price table
+  summary and before the remaining pending tool-output builders.
+- Focused validation passed: `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py`
+  reported 24 passed.
+
+The remaining Plan B dataset-building work starts with `get_indicators`; evaluation
+runs are still pending.
 
 When the Plan B dataset and full run are complete, update this section with:
 

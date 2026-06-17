@@ -44,7 +44,7 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/dataset.py` (DuckDB-backed `EvalDataset`, `tool_outputs` + `prices` tables, idempotent upserts).
 - [ ] (pending) Create the `build-eval-dataset` entry point with a Reddit-specific availability/status gate in `src/trading_agents/evaluation/build_dataset.py`; this gate belongs to the `fetch_reddit_posts` builder step only and must not block implementation or collection for non-Reddit tools.
 - [x] (2026-06-17 00:00Z) Implemented the shared price-table and trading-day calendar build in `build_dataset.py`: write close prices for the selected evaluation tickers and the default benchmark ticker, SPY, before recording per-tool payloads.
-- [ ] (pending) Implement dataset building for `get_stock_data`: record the market-data text block for each evaluation ticker and for SPY on each trading day using the same lookback window the analyst stage will request; SPY history is required by the portfolio manager's self-reflection and benchmark-relative realized-return calculations.
+- [x] (2026-06-17 06:37Z) Implemented shared dataset building for `get_stock_data`: record the market-data text block for each evaluation ticker and for SPY on each trading day using the same lookback window the analyst stage will request; SPY history is required by the portfolio manager's self-reflection and benchmark-relative realized-return calculations.
 - [ ] (pending) Implement dataset building for `get_indicators`: record the indicator text block for each ticker and trading day using the same indicator list and lookback window as the analyst stage.
 - [ ] (pending) Implement dataset building for `get_news`: record ticker-news text through the historical source layer and preserve the live tool's output shape.
 - [ ] (pending) Implement dataset building for `get_global_news`: record global-market-news text through the historical source layer for each trading day.
@@ -334,10 +334,30 @@ periods:
   `data/eval_dataset.duckdb` and `2024-01-01..2024-03-29`, confirming Plan 07
   defaults remain unchanged.
 
+At this milestone, the Reddit availability/status gate and all analyst tool-output
+writers were still pending.
+
+Milestone 5 — Shared `get_stock_data` tool-output builder (2026-06-17). Added the
+first analyst tool-output writer in the same shared builder path used by Plan 07 and
+Plan B:
+
+- `build_stock_data_outputs()` records `get_stock_data` payloads for each selected
+  ticker plus SPY on each benchmark transaction day, keyed by
+  `(tool_name, ticker, as_of_date)` through `EvalDataset.put_tool_output()`.
+- Each payload is rendered by the existing `get_stock_data_text()` helper with
+  `start_date = as_of_date - settings.analyst_stage.lookback_days` and
+  `end_date = as_of_date`, matching the analyst-stage `prepare_analyst_inputs()`
+  window.
+- The CLI summary now reports `get_stock_data outputs built`, payload count,
+  symbol list, transaction-day range, and `lookback_days`; remaining tool-output
+  builders are still marked pending.
+- Focused validation: `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py`
+  passed with 24 tests.
+
 Remaining builder work: the Reddit availability/status gate must run before Reddit
-payload writes, and the ten analyst tool-output writers remain pending. Non-Reddit
-writers should be implemented, tested, collected into DuckDB, and summarized
-independently of the Reddit gate.
+payload writes, and the nine remaining analyst tool-output writers remain pending.
+Non-Reddit writers should be implemented, tested, collected into DuckDB, and
+summarized independently of the Reddit gate.
 
 
 ## Context and Orientation
