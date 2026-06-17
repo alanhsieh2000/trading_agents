@@ -9,6 +9,7 @@ look like the existing analyst tool outputs.
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urlparse
@@ -16,6 +17,7 @@ from urllib.parse import urlparse
 import pandas as pd
 from dotenv import load_dotenv
 from exa_py import Exa
+import exa_py.api as exa_api
 
 from trading_agents.tools.news import _format_news_block, _parse_news_timestamp
 from trading_agents.tools.sentiment import _one_line, _trim_text
@@ -24,6 +26,7 @@ from trading_agents.tools.sentiment import _one_line, _trim_text
 load_dotenv()
 
 EXA_API_KEY_ENV = "EXA_API_KEY"
+EXA_REQUEST_TIMEOUT_SECONDS = 20
 
 
 def fetch_news_via_exa(query: str, start_date: str, end_date: str, limit: int) -> str:
@@ -177,7 +180,54 @@ def _get_exa_client() -> Exa:
             "EXA_API_KEY is required to build evaluation news/social sources. "
             "Add it to .env or export it in the environment."
         )
-    return Exa(api_key=api_key)
+    client = Exa(api_key=api_key)
+    original_request = getattr(client, "request", None)
+    if original_request is None:
+        return client
+
+    def request_with_timeout(*args: Any, **kwargs: Any) -> Any:
+        with _exa_request_timeout_patch():
+            return original_request(*args, **kwargs)
+
+    client.request = request_with_timeout
+    return client
+
+
+@contextmanager
+def _exa_request_timeout_patch() -> Any:
+    """Temporarily add bounded timeouts to the Exa SDK's requests calls."""
+    original_get = exa_api.requests.get
+    original_post = exa_api.requests.post
+    original_patch = exa_api.requests.patch
+    original_delete = exa_api.requests.delete
+
+    def get_with_timeout(*args: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("timeout", EXA_REQUEST_TIMEOUT_SECONDS)
+        return original_get(*args, **kwargs)
+
+    def post_with_timeout(*args: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("timeout", EXA_REQUEST_TIMEOUT_SECONDS)
+        return original_post(*args, **kwargs)
+
+    def patch_with_timeout(*args: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("timeout", EXA_REQUEST_TIMEOUT_SECONDS)
+        return original_patch(*args, **kwargs)
+
+    def delete_with_timeout(*args: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("timeout", EXA_REQUEST_TIMEOUT_SECONDS)
+        return original_delete(*args, **kwargs)
+
+    exa_api.requests.get = get_with_timeout
+    exa_api.requests.post = post_with_timeout
+    exa_api.requests.patch = patch_with_timeout
+    exa_api.requests.delete = delete_with_timeout
+    try:
+        yield
+    finally:
+        exa_api.requests.get = original_get
+        exa_api.requests.post = original_post
+        exa_api.requests.patch = original_patch
+        exa_api.requests.delete = original_delete
 
 
 def _normalise_exa_news_result(result: Any) -> dict[str, Any]:

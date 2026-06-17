@@ -18,6 +18,7 @@ import yfinance as yf
 
 from trading_agents.config import get_settings
 from trading_agents.evaluation.dataset import EvalDataset
+from trading_agents.evaluation.exa_sources import fetch_news_via_exa
 from trading_agents.tools.market_data import (
     ALLOWED_INDICATORS,
     _normalise_price_history,
@@ -46,6 +47,7 @@ class BuildDatasetOptions:
     weight_under: float
     limit_days: int | None
     verify_only: bool
+    news_limit: int = 40
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,7 @@ class DatasetBuildResult:
     price_result: PriceBuildResult
     stock_data_result: ToolOutputBuildResult
     indicators_result: ToolOutputBuildResult
+    news_result: ToolOutputBuildResult
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -120,6 +123,7 @@ def options_from_settings(
         weight_under=evaluation.weight_under,
         limit_days=args.limit_days,
         verify_only=bool(args.verify_only),
+        news_limit=settings.news.ticker_limit * 2,
     )
 
 
@@ -138,6 +142,7 @@ def render_options(options: BuildDatasetOptions) -> str:
             f"weight_over: {options.weight_over}",
             f"weight_under: {options.weight_under}",
             f"limit_days: {limit_days}",
+            f"news_limit: {options.news_limit}",
         ]
     )
 
@@ -307,6 +312,39 @@ def build_indicator_outputs(
     )
 
 
+def build_news_outputs(
+    options: BuildDatasetOptions,
+    dataset: EvalDataset,
+    transaction_days: Sequence[str],
+) -> ToolOutputBuildResult:
+    """Record replayable ``get_news`` payloads for each ticker and day."""
+    symbols = _symbols_for_indicator_outputs(options)
+    payloads_written = 0
+
+    for symbol in symbols:
+        for as_of_date in transaction_days:
+            start_date = _lookback_start_date(as_of_date, options.lookback_days)
+            try:
+                payload = fetch_news_via_exa(
+                    symbol,
+                    start_date=start_date,
+                    end_date=as_of_date,
+                    limit=options.news_limit,
+                )
+            except Exception as exc:
+                payload = f"Error fetching news for {symbol}: {exc}"
+            dataset.put_tool_output("get_news", symbol, as_of_date, payload)
+            payloads_written += 1
+
+    return ToolOutputBuildResult(
+        tool_name="get_news",
+        symbols=symbols,
+        payloads_written=payloads_written,
+        transaction_days=tuple(transaction_days),
+        lookback_days=options.lookback_days,
+    )
+
+
 def build_dataset(options: BuildDatasetOptions) -> DatasetBuildResult:
     """Build the currently implemented shared dataset pieces."""
     with EvalDataset(options.dataset_path) as dataset:
@@ -317,10 +355,12 @@ def build_dataset(options: BuildDatasetOptions) -> DatasetBuildResult:
         indicators_result = build_indicator_outputs(
             options, dataset, price_result.transaction_days
         )
+        news_result = build_news_outputs(options, dataset, price_result.transaction_days)
         return DatasetBuildResult(
             price_result=price_result,
             stock_data_result=stock_data_result,
             indicators_result=indicators_result,
+            news_result=news_result,
         )
 
 
@@ -364,6 +404,7 @@ def render_dataset_result(result: DatasetBuildResult) -> str:
             render_price_result(result.price_result),
             render_tool_output_result(result.stock_data_result),
             render_tool_output_result(result.indicators_result),
+            render_tool_output_result(result.news_result),
             "remaining tool-output builders: pending",
         ]
     )

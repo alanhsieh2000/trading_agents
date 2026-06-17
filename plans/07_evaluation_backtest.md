@@ -46,7 +46,7 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [x] (2026-06-17 00:00Z) Implemented the shared price-table and trading-day calendar build in `build_dataset.py`: write close prices for the selected evaluation tickers and the default benchmark ticker, SPY, before recording per-tool payloads.
 - [x] (2026-06-17 06:37Z) Implemented and populated shared dataset building for `get_stock_data`: recorded the market-data text block for each evaluation ticker and for SPY on each trading day using the same lookback window the analyst stage will request; SPY history is required by the portfolio manager's self-reflection and benchmark-relative realized-return calculations. Wrote 244 persistent `get_stock_data` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, SPY 61.
 - [x] (2026-06-17) Implemented and populated dataset building for `get_indicators`: records all allowed indicators from `src/trading_agents/tools/market_data.py` for each configured ticker and trading day using the analyst-stage lookback window. Wrote 183 persistent `get_indicators` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero SPY indicator rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison matched for `AMZN` on `2024-02-27` with 12 indicators.
-- [ ] (pending) Implement dataset building for `get_news`: record ticker-news text through the historical source layer and preserve the live tool's output shape.
+- [x] (2026-06-17 13:03Z) Implemented and populated shared dataset building for `get_news`: records ticker-news text through the Exa historical source layer with the same markdown/no-news/error contract as the live Yahoo-backed tool. The builder uses a doubled news limit (`settings.news.ticker_limit * 2`, currently 40) for buffer coverage, writes ticker rows only, and shares the same implementation with Plan B. Wrote 183 persistent `get_news` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AMZN on `2024-03-05`; the evaluation-backed `get_news` tool matched the DuckDB payload exactly and returned 39 articles for `2024-02-27..2024-03-05`.
 - [ ] (pending) Implement dataset building for `get_global_news`: record global-market-news text through the historical source layer for each trading day.
 - [ ] (pending) Implement dataset building for `fetch_reddit_posts`: record Reddit sentiment text with explicit handling for rate limits, blocked access, empty results, and parse failures. This is the only pending dataset-building step that is gated by source-availability/status verification.
 - [ ] (pending) Implement dataset building for `fetch_stocktwits_messages`: record StockTwits sentiment text and distinguish empty results from source access failures where possible.
@@ -145,6 +145,13 @@ future contributor can gauge the rate of progress.
   newest posts per query (`t=year&limit=100`, no pagination), reaching back only to
   ~Aug 2025; 2025-Q3 is effectively unreachable. The 2026-Q1 recommendation reflects
   data-availability recency, not necessarily superior historical sentiment depth.
+- Observation (2026-06-17): The Exa Python SDK call path used by `exa_sources.py`
+  does not expose a timeout parameter and internally calls `requests.post()` without
+  a timeout, so one slow response can stall a dataset build indefinitely.
+  Evidence: an interrupted `get_news` ingestion was blocked in
+  `exa_py/api.py:requests.post(...).getresponse()`. The fix wraps the SDK's internal
+  requests functions with a 20-second default timeout and records per-row
+  `Error fetching news for ...` payloads if a historical news fetch fails.
 
 Add new observations here as they arise, with a short evidence snippet (test output
 is ideal).
