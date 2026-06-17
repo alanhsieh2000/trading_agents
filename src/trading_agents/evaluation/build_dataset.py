@@ -1,19 +1,24 @@
-"""CLI skeletons for building prepared evaluation datasets.
+"""CLI support for building prepared evaluation datasets.
 
-This module currently owns the configuration and verification entrypoint for
-Plan B. The canonical Plan 07 ``build-eval-dataset`` command is intentionally
-not registered yet; that name is reserved for the original 2024-Q1 evaluation.
-The source-specific dataset writers are implemented in later Plan 07/07b steps.
+This module owns the shared dataset-building pieces for both the canonical
+Plan 07 evaluation and the Plan B evaluation. The two entry points differ only
+in their default date window and dataset path; the write paths are shared so the
+backtest mechanics remain comparable.
 """
 
 from __future__ import annotations
 
 import argparse
-import sys
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from typing import Sequence
 
+import pandas as pd
+import yfinance as yf
+
 from trading_agents.config import get_settings
+from trading_agents.evaluation.dataset import EvalDataset
+from trading_agents.tools.market_data import _normalise_price_history
 
 
 PLAN_B_START_DATE = "2026-01-01"
@@ -35,6 +40,15 @@ class BuildDatasetOptions:
     weight_under: float
     limit_days: int | None
     verify_only: bool
+
+
+@dataclass(frozen=True)
+class PriceBuildResult:
+    symbols: tuple[str, ...]
+    rows_by_symbol: dict[str, int]
+    transaction_days: tuple[str, ...]
+    fetch_start_date: str
+    fetch_end_date: str
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -103,6 +117,127 @@ def render_options(options: BuildDatasetOptions) -> str:
     )
 
 
+def _parse_date(value: str) -> date:
+    return datetime.strptime(value, "%Y-%m-%d").date()
+
+
+def _exclusive_tail_end_date(end_date: str, price_tail_days: int) -> str:
+    """Return the yfinance-exclusive end date including the configured tail."""
+    return (_parse_date(end_date) + timedelta(days=price_tail_days + 1)).isoformat()
+
+
+def _symbols_for_prices(options: BuildDatasetOptions) -> tuple[str, ...]:
+    seen: set[str] = set()
+    symbols: list[str] = []
+    for symbol in (*options.tickers, options.benchmark):
+        normalized = symbol.upper().strip()
+        if normalized and normalized not in seen:
+            symbols.append(normalized)
+            seen.add(normalized)
+    return tuple(symbols)
+
+
+def _download_close_rows(symbol: str, start_date: str, end_date: str) -> list[tuple[str, float]]:
+    try:
+        history = yf.download(
+            symbol,
+            start=start_date,
+            end=end_date,
+            progress=False,
+            auto_adjust=False,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to fetch price history for {symbol} from {start_date} to {end_date}: {exc}"
+        ) from exc
+
+    if history is None or history.empty:
+        raise RuntimeError(
+            f"No price history returned for {symbol} from {start_date} to {end_date}."
+        )
+
+    prices = _normalise_price_history(history, symbol)
+    if prices.empty or "close" not in prices.columns:
+        raise RuntimeError(
+            f"Price history for {symbol} has no close column from {start_date} to {end_date}."
+        )
+
+    rows: list[tuple[str, float]] = []
+    for _, row in prices.iterrows():
+        close = row["close"]
+        if pd.isna(close):
+            continue
+        try:
+            rows.append((str(row["date"]), float(close)))
+        except (TypeError, ValueError):
+            continue
+
+    if not rows:
+        raise RuntimeError(
+            f"Price history for {symbol} has no usable close rows from {start_date} to {end_date}."
+        )
+    return rows
+
+
+def build_price_table(options: BuildDatasetOptions, dataset: EvalDataset) -> PriceBuildResult:
+    """Write buffered close prices and derive the benchmark trading calendar."""
+    symbols = _symbols_for_prices(options)
+    fetch_start_date = options.buffer_start_date
+    fetch_end_date = _exclusive_tail_end_date(options.end_date, options.price_tail_days)
+    rows_by_symbol: dict[str, int] = {}
+
+    for symbol in symbols:
+        rows = _download_close_rows(symbol, fetch_start_date, fetch_end_date)
+        dataset.put_prices(symbol, rows)
+        rows_by_symbol[symbol] = len(rows)
+
+    transaction_days = dataset.transaction_days(
+        benchmark=options.benchmark,
+        start_date=options.start_date,
+        end_date=options.end_date,
+    )
+    if options.limit_days is not None:
+        transaction_days = transaction_days[: options.limit_days]
+    if not transaction_days:
+        raise RuntimeError(
+            f"No benchmark transaction days for {options.benchmark} in "
+            f"{options.start_date}..{options.end_date}."
+        )
+
+    return PriceBuildResult(
+        symbols=symbols,
+        rows_by_symbol=rows_by_symbol,
+        transaction_days=tuple(transaction_days),
+        fetch_start_date=fetch_start_date,
+        fetch_end_date=fetch_end_date,
+    )
+
+
+def build_dataset(options: BuildDatasetOptions) -> PriceBuildResult:
+    """Build the currently implemented shared dataset pieces."""
+    with EvalDataset(options.dataset_path) as dataset:
+        return build_price_table(options, dataset)
+
+
+def render_price_result(result: PriceBuildResult) -> str:
+    lines = [
+        "Price table built",
+        f"price_window: {result.fetch_start_date}..{result.fetch_end_date} (end exclusive)",
+        "price_rows:",
+    ]
+    for symbol in result.symbols:
+        lines.append(f"  {symbol}: {result.rows_by_symbol[symbol]}")
+    lines.extend(
+        [
+            f"transaction_days: {len(result.transaction_days)}",
+            f"first_transaction_day: {result.transaction_days[0]}",
+            f"last_transaction_day: {result.transaction_days[-1]}",
+            "tool-output builders: pending",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _run(argv: Sequence[str] | None, *, plan_b_defaults: bool) -> int:
     args = parse_args(argv)
     options = options_from_settings(args, plan_b_defaults=plan_b_defaults)
@@ -110,12 +245,9 @@ def _run(argv: Sequence[str] | None, *, plan_b_defaults: bool) -> int:
     if options.verify_only:
         print("verify-only: dataset writes skipped")
         return 0
-    print(
-        "Dataset writing is not implemented yet. Continue with the next "
-        "Plan 07b dataset-building step.",
-        file=sys.stderr,
-    )
-    return 2
+    result = build_dataset(options)
+    print(render_price_result(result))
+    return 0
 
 
 def plan_b_main(argv: Sequence[str] | None = None) -> int:

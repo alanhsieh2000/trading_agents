@@ -34,12 +34,12 @@ The concrete result values above are illustrative. The final implementation must
 - [x] (2026-06-16) Completed the Plan B Reddit coverage scanner and recorded its recommendation in `plans/07_evaluation_backtest.md`: 2026-Q1 ranked first with `posts=176`, `>=1 coverage=82.0%`, `>=3 coverage=71.6%`, `min ticker coverage=50.8%`, and `pairs=6/9`.
 - [x] (2026-06-16) Verified the 2026-Q1 trading calendar with yfinance: SPY, AAPL, GOOGL, and AMZN each have 61 rows from 2026-01-02 through 2026-03-31 for the inclusive Plan B window `2026-01-01..2026-03-31`.
 - [x] (2026-06-16) Added the `build-plan-b-eval-dataset` entry point skeleton and verified it uses Plan B dates and dataset path without taking over the reserved Plan 07 `build-eval-dataset` command; `--verify-only` prints resolved settings and skips DuckDB writes.
-- [ ] (pending) Implement the shared price-table and trading-day calendar build for Plan B: write close prices for AAPL, GOOGL, AMZN, and the default benchmark ticker, SPY, into `data/eval_dataset_2026q1.duckdb` before recording per-tool payloads.
+- [x] (2026-06-17 00:00Z) Implemented the shared price-table and trading-day calendar build for Plan B: write close prices for selected tickers and the default benchmark ticker, SPY, into `data/eval_dataset_2026q1.duckdb` before recording per-tool payloads. A live smoke run for `--tickers AAPL --limit-days 3` wrote 92 AAPL rows and 92 SPY rows and derived transaction days `2026-01-02..2026-01-06`.
 - [ ] (pending) Implement Plan B dataset building for `get_stock_data`: record the market-data text block for AAPL, GOOGL, AMZN, and SPY on each trading day using the same lookback window the analyst stage will request; SPY history is required by the portfolio manager's self-reflection and benchmark-relative realized-return calculations.
 - [ ] (pending) Implement Plan B dataset building for `get_indicators`: record the indicator text block for each ticker and trading day using the same indicator list and lookback window as the analyst stage.
 - [ ] (pending) Implement Plan B dataset building for `get_news`: record ticker-news text through the historical source layer and preserve the live tool's output shape.
 - [ ] (pending) Implement Plan B dataset building for `get_global_news`: record global-market-news text through the historical source layer for each trading day.
-- [ ] (pending) Implement Plan B dataset building for `fetch_reddit_posts`: record Reddit sentiment text with explicit handling for rate limits, blocked access, empty results, and parse failures.
+- [ ] (pending) Implement Plan B dataset building for `fetch_reddit_posts`: record Reddit sentiment text for the chosen 2026-Q1 period using the fixed Reddit RSS/request-volume handling, with explicit handling for rate limits, blocked access, empty results, and parse failures.
 - [ ] (pending) Implement Plan B dataset building for `fetch_stocktwits_messages`: record StockTwits sentiment text and distinguish empty results from source access failures where possible.
 - [ ] (pending) Implement Plan B dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
 - [ ] (pending) Implement Plan B dataset building for `get_balance_sheet`: record best-effort balance-sheet text for each ticker and trading day.
@@ -98,6 +98,22 @@ Add new observations here as they arise, with a short evidence snippet. Test out
   dataset" task.
   Date/Author: 2026-06-16 / Codex
 
+- Decision: Use the same `build_price_table()` implementation for Plan B and the
+  canonical Plan 07 evaluation.
+  Rationale: The only intended difference between the two evaluations is the period
+  and dataset artifact. Prices, benchmark-derived transaction days, yfinance
+  normalization, and idempotent DuckDB writes should remain identical.
+  Date/Author: 2026-06-17 / Codex
+
+- Decision: Do not apply a source-availability gate to Plan B. Collect Reddit for the
+  chosen 2026-Q1 period using the fixed Reddit RSS/request-volume handling.
+  Rationale: The user clarified on 2026-06-17 that the Reddit gate applies to Plan 07's
+  canonical 2024-Q1 problem, not Plan B. Plan B was selected precisely because the
+  fixed scanner can retrieve Reddit posts during 2026-Q1. All Plan B builders,
+  including `fetch_reddit_posts`, should be implemented, tested, collected, and
+  summarized source by source.
+  Date/Author: 2026-06-17 / Codex (user direction)
+
 Record every further decision here, with the reasoning, as the plan evolves.
 
 
@@ -118,6 +134,26 @@ availability checks and dataset writes remain pending in the following tool-spec
 steps.
 
 No Plan B evaluation run has been completed yet.
+
+Milestone 1 — Shared price table and calendar build (2026-06-17). Added the first
+write phase that Plan B shares with Plan 07:
+
+- `src/trading_agents/evaluation/build_dataset.py` now has `build_price_table()`, which
+  downloads yfinance close prices for the selected tickers plus SPY from
+  `buffer_start_date` through `end_date + price_tail_days`, writes them with
+  `EvalDataset.put_prices()`, and derives transaction days from SPY.
+- The builder de-duplicates symbols, so SPY is written once even if it appears in the
+  ticker subset and as the benchmark.
+- Focused validation passed: `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py`
+  reported 23 passed.
+- Live smoke validation passed: `uv run build-plan-b-eval-dataset --tickers AAPL --limit-days 3`
+  wrote `data/eval_dataset_2026q1.duckdb`, recorded 92 close-price rows each for AAPL
+  and SPY over `2025-12-01..2026-04-15` with the end date exclusive, and reported
+  three transaction days from `2026-01-02` through `2026-01-06`.
+
+Analyst tool-output recording and evaluation runs remain pending. Plan B has no
+source-availability gate; Reddit collection should use the fixed 2026-Q1 RSS path and
+preserve source statuses in the collected payload summary.
 
 When the Plan B dataset and full run are complete, update this section with:
 
@@ -173,7 +209,7 @@ First, keep the canonical defaults in `src/trading_agents/config/settings.py` un
 
 Second, ensure `build-plan-b-eval-dataset` uses the Plan B-specific dates and dataset path while still reading shared fields from `get_settings().evaluation`: `tickers`, `benchmark`, `price_tail_days`, `weight_over`, and `weight_under`. Keep the command name separate from `build-eval-dataset`, which is reserved for the original Plan 07 evaluation. Any hard-coded 2024 dates inside Plan B builder or runner code must be replaced by the Plan B constants or explicit Plan B options.
 
-Third, build the Plan B dataset using the same source rules as Plan 07. Prices and indicators come from yfinance historical data. News and social blocks come from the existing historical source layer, with Reddit treated as required. Fundamentals remain best-effort current snapshots unless a point-in-time source has been added separately.
+Third, build the Plan B dataset using the same source rules as Plan 07 except for Reddit availability: prices and indicators come from yfinance historical data; news and social blocks come from the existing historical source layer; Reddit is collected for the chosen 2026-Q1 period using the fixed RSS/request-volume handling from the scanner; and fundamentals remain best-effort current snapshots unless a point-in-time source has been added separately. There is no source-availability gate for Plan B.
 
 When implementing the `get_stock_data` portion, include the default benchmark ticker,
 SPY, in addition to AAPL, GOOGL, and AMZN. SPY is not just a calendar source: the
@@ -183,9 +219,16 @@ wherever the evaluation may need benchmark history.
 
 Treat the ten analyst data tools as ten separate builder sub-tasks, not as one monolith. Implement and validate `get_stock_data`, `get_indicators`, `get_news`, `get_global_news`, `fetch_reddit_posts`, `fetch_stocktwits_messages`, `get_fundamentals`, `get_balance_sheet`, `get_cashflow`, and `get_income_statement` one by one. If a source exposes a new failure mode while its payloads are being recorded, stop and resolve that source-specific issue before moving to the next tool. This is especially important for Reddit. The Plan B scanner in `plans/07b_reddit_coverage_scanner.md` found that Reddit HTTP 429s were caused by too many unauthenticated RSS requests from a cloud/datacenter IP, not a total IP block. A single request could return HTTP 200, but `3 tickers × 3 subreddits × 3 aliases = 27` requests exceeded Reddit's tight shared budget. The scanner fix OR-joined aliases into one query per `(ticker, subreddit)`, reducing volume from 27 requests to 9, and made 429s bounded and non-fatal by honoring `Retry-After` before falling back to fixed backoff. The scanner completed with `--delay 8`; the dataset builder should use at least 10 seconds between Reddit RSS requests to include a 2-second buffer. Reuse that lesson for any Reddit dataset ingestion path: minimize request volume, preserve structured statuses such as `ok`, `empty`, `blocked`, `rate_limited`, `timeout`, and `parse_error`, and never collapse access failures into ordinary "No data available" strings during verification.
 
+After each dataset-building step is coded and validated with the needed focused tests,
+run the corresponding builder for Plan B, and for Plan 07 too when the source applies to
+both datasets. Summarize exactly what was collected before moving on: DuckDB file, tool
+name, tickers, covered date range, trading-day count, row count, and any source warnings.
+Wait for user feedback on that summary if the collected slice reveals degraded or
+surprising data.
+
 Fourth, run the Plan B evaluator against `data/eval_dataset_2026q1.duckdb`. The runner must iterate transaction days chronologically because portfolio lessons accumulate over time. It must run every ticker on every transaction day and write reports under `output/eval/` or an equivalent isolated evaluation output directory.
 
-Fifth, update this ExecPlan as work proceeds. If the source availability gate fails for Plan B, do not silently drop Reddit. Record the failure in `Surprises & Discoveries`, leave the dataset incomplete or absent, and stop before presenting a CR report.
+Fifth, update this ExecPlan as work proceeds. If Plan B Reddit collection exposes a new failure mode despite the fixed 2026-Q1 path, do not silently drop Reddit. Record the failure in `Surprises & Discoveries`, leave Reddit payloads incomplete or absent, and stop before presenting a CR report until the issue is resolved.
 
 
 ## Concrete Steps
@@ -229,19 +272,19 @@ Run all commands from `/app/trading_agents`.
 
    Expected: all tests pass. If builder or runner tests have been added, include them in this command before marking this step complete.
 
-4. Verify Plan B source availability before writing the dataset. This needs `EXA_API_KEY` and network access:
+4. Confirm the Plan B builder still resolves the chosen 2026-Q1 period before writing payloads:
 
        uv run build-plan-b-eval-dataset --verify-only
 
-   Expected success: a compact source-by-source report showing ticker news, global news, Reddit, and StockTwits available for the Plan B probe window, followed by zero exit code and no DuckDB writes.
-
-   Expected failure: a nonzero exit with a report naming the unavailable source. If Reddit is unavailable, stop and update this plan. Do not build a no-Reddit Plan B dataset under this plan.
+   Expected: resolved Plan B settings are printed and no DuckDB writes occur. This is
+   not a source-availability gate. Reddit payloads are collected during the
+   `fetch_reddit_posts` builder step using the fixed RSS/request-volume handling.
 
 5. Build a small Plan B dataset slice:
 
        uv run build-plan-b-eval-dataset --tickers AAPL --limit-days 3
 
-   Expected: `data/eval_dataset_2026q1.duckdb` exists and contains prices plus recorded tool outputs for AAPL over three transaction days. `data/eval_dataset.duckdb` must not be created or modified by this command unless it already existed for Plan 07 and is untouched.
+   Expected: `data/eval_dataset_2026q1.duckdb` exists and contains prices plus the implemented recorded tool outputs for AAPL over three transaction days. For each newly implemented builder, summarize the collected tool name, tickers, date range, trading-day count, row count, and warnings. `data/eval_dataset.duckdb` must not be created or modified by this Plan B command unless the run intentionally also collects the corresponding Plan 07 slice and reports that separately.
 
 6. Run a Plan B smoke evaluation:
 
@@ -273,7 +316,7 @@ Acceptance is behavioral:
 - Plan 07 defaults remain unchanged: importing `get_settings().evaluation` with no Plan B environment variables still returns `start_date='2024-01-01'`, `end_date='2024-03-29'`, and `dataset_path='data/eval_dataset.duckdb'`.
 - `build-plan-b-eval-dataset --verify-only` resolves the Plan B dataset path and dates without environment overrides and without changing Plan 07 defaults.
 - `uv run pytest tests/test_eval_backtest.py tests/test_eval_dataset.py tests/test_eval_exa_sources.py tests/test_eval_reddit_coverage.py` passes, along with any builder or runner tests added by Plan 07 implementation.
-- `uv run build-plan-b-eval-dataset --verify-only` checks source availability before creating or modifying `data/eval_dataset_2026q1.duckdb`.
+- `uv run build-plan-b-eval-dataset --verify-only` resolves Plan B settings and does not write payload rows. It is not a source-availability gate.
 - `uv run build-plan-b-eval-dataset --tickers AAPL --limit-days 3` creates or refreshes only the Plan B dataset artifact.
 - `uv run run-eval --tickers AAPL --limit-days 3` with Plan B overrides produces a rating list and CR value while reading analyst data from the Plan B dataset.
 - The full Plan B run reports CR for AAPL, GOOGL, and AMZN over `2026-01-01..2026-03-31`, with transaction days `2026-01-02..2026-03-31`.
@@ -281,9 +324,9 @@ Acceptance is behavioral:
 
 ## Idempotence and Recovery
 
-The Plan B dataset path is separate from the canonical Plan 07 dataset path. Rebuilding Plan B should use idempotent DuckDB upserts, so rerunning the builder refreshes rows instead of duplicating them. If the build is interrupted after source verification passes, rerun the same Plan B command.
+The Plan B dataset path is separate from the canonical Plan 07 dataset path. Rebuilding Plan B should use idempotent DuckDB upserts, so rerunning the builder refreshes rows instead of duplicating them. If any Plan B source build is interrupted after its code and tests pass, rerun the same Plan B command.
 
-The source availability check must run before DuckDB writes. If `EXA_API_KEY` is missing, or if ticker news, global news, Reddit, or StockTwits is unavailable for the Plan B probe window, the builder should fail clearly and leave the Plan B dataset untouched.
+Plan B has no source-availability gate. The Reddit builder should still preserve structured statuses and fail clearly if the fixed 2026-Q1 collection path exposes a new access or parser failure; existing non-Reddit Plan B dataset rows should remain untouched.
 
 The evaluation run should write only to an isolated evaluation output directory, such as `output/eval/`. Delete that directory to start a clean report run. Do not delete or rewrite ordinary `output/<ticker>_<date>/` artifacts as part of Plan B.
 
@@ -292,14 +335,15 @@ If a needed tool output is missing at evaluation time, the dataset reader should
 
 ## Artifacts and Notes
 
-Representative Plan B source scan:
+Representative Plan B source collection summary:
 
-    Source availability check — 2025-12-01..2025-12-10
-    AAPL  news available | reddit available | stocktwits available
-    GOOGL news available | reddit available | stocktwits available
-    AMZN  news available | reddit available | stocktwits available
-    global_news available
-    OK: required sources available; dataset may be built
+    Collected data/eval_dataset_2026q1.duckdb
+    tool: fetch_reddit_posts
+    tickers: AAPL, GOOGL, AMZN
+    trading days: 61 (2026-01-02 .. 2026-03-31)
+    tool_outputs rows: 183
+    source statuses: ok=170 empty=13 rate_limited=0 blocked=0 timeout=0 parse_error=0
+    notes: used OR-joined aliases and at least 10 seconds between Reddit RSS requests
 
 Representative Plan B builder summary:
 
@@ -329,7 +373,7 @@ Plan B should not introduce new public APIs unless the Plan 07 implementation st
 - `src/trading_agents/evaluation/dataset.py` provides `EvalDataset`.
 - `src/trading_agents/evaluation/backtest.py` provides the pure exchange simulator and CR calculation.
 - `src/trading_agents/evaluation/exa_sources.py` provides historical news and social source helpers.
-- `src/trading_agents/evaluation/build_dataset.py` provides the `build-plan-b-eval-dataset` entry point; `build-eval-dataset` remains reserved for Plan 07.
+- `src/trading_agents/evaluation/build_dataset.py` provides shared builder code plus the `build-plan-b-eval-dataset` entry point; `build-eval-dataset` is registered for Plan 07 and uses the canonical 2024-Q1 settings defaults.
 - `src/trading_agents/evaluation/run_eval.py` provides the `run-eval` entry point.
 - `pyproject.toml` registers the console scripts.
 
@@ -350,3 +394,14 @@ The Plan B builder command itself owns these Plan B-specific defaults:
     dataset_path=data/eval_dataset_2026q1.duckdb
 
 Revision Note: 2026-06-16 Initial Plan B ExecPlan drafted after the Reddit coverage scanner ranked 2026-Q1 first and yfinance confirmed 61 trading days for SPY, AAPL, GOOGL, and AMZN from 2026-01-02 through 2026-03-31. This plan intentionally keeps Plan 07 as the canonical 2024-Q1 evaluation and uses a separate Plan B dataset artifact.
+
+Revision Note: 2026-06-17 Implemented and documented the shared yfinance price-table
+builder for Plan B and Plan 07. The Plan B smoke build now creates the isolated
+`data/eval_dataset_2026q1.duckdb` price table for AAPL plus SPY; analyst tool outputs
+and evaluation runs remain pending.
+
+Revision Note: 2026-06-17 Clarified per user direction that Plan B has no
+source-availability gate because the fixed scanner/retrieval path can retrieve Reddit
+posts during the chosen 2026-Q1 backtest period. Plan B `fetch_reddit_posts` should be
+implemented, tested, collected, and summarized like the other source builders, while
+preserving structured source statuses and rate-limit handling.

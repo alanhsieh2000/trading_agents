@@ -10,3 +10,4 @@ output/
 pre-claude.sh
 pre-codex.sh
 .claude
+data/

@@ -42,19 +42,19 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [x] (2026-06-11) Added `EvaluationSettings` to `src/trading_agents/config/settings.py`, wired it into `AppSettings`, and exported it from `config/__init__.py`.
 - [x] (2026-06-12 05:55Z) Added `exa-py` usage and an `EXA_API_KEY` requirement; created `src/trading_agents/evaluation/exa_sources.py` with historical news, global-news, Reddit, and StockTwits helpers plus unit tests.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/dataset.py` (DuckDB-backed `EvalDataset`, `tool_outputs` + `prices` tables, idempotent upserts).
-- [ ] (pending) Create the `build-eval-dataset` entry point with an early historical-source availability gate in `src/trading_agents/evaluation/build_dataset.py`; the gate must run before DuckDB writes and fail fast if required Exa sources are unavailable for the configured period.
-- [ ] (pending) Implement the shared price-table and trading-day calendar build in `build_dataset.py`: write close prices for the evaluation tickers and the default benchmark ticker, SPY, before recording per-tool payloads.
+- [ ] (pending) Create the `build-eval-dataset` entry point with a Reddit-specific availability/status gate in `src/trading_agents/evaluation/build_dataset.py`; this gate belongs to the `fetch_reddit_posts` builder step only and must not block implementation or collection for non-Reddit tools.
+- [x] (2026-06-17 00:00Z) Implemented the shared price-table and trading-day calendar build in `build_dataset.py`: write close prices for the selected evaluation tickers and the default benchmark ticker, SPY, before recording per-tool payloads.
 - [ ] (pending) Implement dataset building for `get_stock_data`: record the market-data text block for each evaluation ticker and for SPY on each trading day using the same lookback window the analyst stage will request; SPY history is required by the portfolio manager's self-reflection and benchmark-relative realized-return calculations.
 - [ ] (pending) Implement dataset building for `get_indicators`: record the indicator text block for each ticker and trading day using the same indicator list and lookback window as the analyst stage.
 - [ ] (pending) Implement dataset building for `get_news`: record ticker-news text through the historical source layer and preserve the live tool's output shape.
 - [ ] (pending) Implement dataset building for `get_global_news`: record global-market-news text through the historical source layer for each trading day.
-- [ ] (pending) Implement dataset building for `fetch_reddit_posts`: record Reddit sentiment text with explicit handling for rate limits, blocked access, empty results, and parse failures.
+- [ ] (pending) Implement dataset building for `fetch_reddit_posts`: record Reddit sentiment text with explicit handling for rate limits, blocked access, empty results, and parse failures. This is the only pending dataset-building step that is gated by source-availability/status verification.
 - [ ] (pending) Implement dataset building for `fetch_stocktwits_messages`: record StockTwits sentiment text and distinguish empty results from source access failures where possible.
 - [ ] (pending) Implement dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
 - [ ] (pending) Implement dataset building for `get_balance_sheet`: record best-effort balance-sheet text for each ticker and trading day.
 - [ ] (pending) Implement dataset building for `get_cashflow`: record best-effort cashflow text for each ticker and trading day.
 - [ ] (pending) Implement dataset building for `get_income_statement`: record best-effort income-statement text for each ticker and trading day.
-- [ ] (pending) If the availability gate fails for the configured 2024-Q1 evaluation, scan candidate replacement periods and record findings before building any dataset.
+- [ ] (pending) If the Reddit availability/status gate fails for the configured 2024-Q1 evaluation, scan candidate replacement periods and record findings before recording Reddit payloads.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/eval_tools.py` (dataset-backed `DatasetBackedTool` + `build_dataset_tools`). Remaining: the analyst-crew tool-injection seam.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/backtest.py` (`simulate_position` + `cumulative_return`).
 - [ ] (pending) Create `src/trading_agents/evaluation/run_eval.py` and the `run-eval` entry point.
@@ -200,12 +200,13 @@ is ideal).
   Date/Author: 2026-06-11 / Claude
 
 - Decision: Treat historical Reddit data as required for the prepared evaluation
-  dataset and make source availability verification the first phase of
-  `build-eval-dataset`.
+  dataset and make source availability/status verification specific to the
+  `fetch_reddit_posts` builder step.
   Rationale: The README evaluation lists Reddit among the analyst data sources, and the
-  user confirmed that missing Reddit should not be silently accepted. A live Exa probe
-  found no Reddit results for the earliest buffer window or sampled Q1 windows, so the
-  builder must fail before DuckDB writes if required sources are unavailable.
+  user confirmed that missing Reddit should not be silently accepted. The user clarified
+  on 2026-06-17 that the availability gate is for Reddit only; other dataset builders
+  such as prices, indicators, news, StockTwits, and fundamentals should be implemented,
+  tested, and collected without waiting for the Reddit gate.
   Date/Author: 2026-06-12 / Codex (confirmed with the user)
 
 - Decision: The evaluation dataset builder must record Reddit probe status separately
@@ -243,6 +244,22 @@ is ideal).
   issue is diagnosed and fixed without hiding it inside a single broad "build dataset"
   task.
   Date/Author: 2026-06-16 / Codex
+
+- Decision: Share the price-table and trading-calendar builder between Plan 07 and
+  Plan B, with the CLI wrappers supplying only different default periods and dataset
+  paths.
+  Rationale: Close-price recording and benchmark-derived transaction days are identical
+  mechanics for both evaluations. Keeping this in one `build_price_table()` path avoids
+  drift between the canonical 2024-Q1 evaluation and the 2026-Q1 Plan B fallback.
+  Date/Author: 2026-06-17 / Codex
+
+- Decision: After each non-Reddit dataset-builder step is implemented and validated
+  with focused tests, immediately collect that tool's data into the corresponding
+  DuckDB files and summarize the collected coverage for user feedback.
+  Rationale: Incremental collection lets the user review each source slice before the
+  full dataset is complete. It also avoids treating the Reddit gate as a blocker for
+  unrelated tools.
+  Date/Author: 2026-06-17 / Codex (user direction)
 
 Record every further decision here, with the reasoning, as the plan evolves.
 
@@ -292,13 +309,35 @@ news/social source helpers that the dataset builder will call:
 What remains after this milestone: create `build_dataset.py` and the
 `build-eval-dataset` entry point so these Exa helpers can populate the DuckDB dataset.
 
-Milestone 3 — Source availability gate (planned next). The next implementation must
-make `build-eval-dataset` verify historical source availability before creating or
-updating the DuckDB dataset. The gate checks the earliest risky buffer window first
-(currently 2023-12-01 through 2023-12-10) for ticker news, global news, Reddit, and
-StockTwits. If any required source is unavailable, especially Reddit, the command exits
-nonzero with a compact source-by-source report and leaves the dataset untouched. Only
-after this gate passes should the builder download prices and record tool outputs.
+Milestone 3 — Reddit availability/status gate (planned next for Reddit only). The
+`fetch_reddit_posts` builder must verify Reddit source status before recording Reddit
+payloads. The gate checks the relevant probe window and preserves structured statuses
+such as `ok`, `empty`, `blocked`, `rate_limited`, `timeout`, and `parse_error`. If
+Reddit is unavailable or access is degraded, the command exits nonzero with a compact
+Reddit report and leaves Reddit `tool_outputs` rows untouched. This gate does not block
+non-Reddit builders.
+
+Milestone 4 — Shared price table and calendar builder (2026-06-17). Added the first
+write phase of `src/trading_agents/evaluation/build_dataset.py` for both evaluation
+periods:
+
+- `build_price_table()` downloads yfinance close prices from the configured buffer
+  start through the configured evaluation end plus `price_tail_days`, writes them
+  idempotently through `EvalDataset.put_prices()`, and derives transaction days from
+  the benchmark ticker.
+- The price symbols are the selected evaluation tickers plus the benchmark, with
+  duplicates removed, so a smoke run such as `--tickers AAPL` still records SPY.
+- `pyproject.toml` now registers `build-eval-dataset` for the canonical Plan 07
+  defaults and keeps `build-plan-b-eval-dataset` for the Plan B defaults.
+- Focused validation: `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py`
+  passed with 23 tests. `uv run build-eval-dataset --verify-only` printed
+  `data/eval_dataset.duckdb` and `2024-01-01..2024-03-29`, confirming Plan 07
+  defaults remain unchanged.
+
+Remaining builder work: the Reddit availability/status gate must run before Reddit
+payload writes, and the ten analyst tool-output writers remain pending. Non-Reddit
+writers should be implemented, tested, collected into DuckDB, and summarized
+independently of the Reddit gate.
 
 
 ## Context and Orientation
@@ -377,9 +416,10 @@ Audited against the backtest window, queried from 2026:
 - News (`get_news`, `get_global_news`) and social posts (Reddit, StockTwits) are **not** historically queryable through the existing tools, so the builder sources them from **Exa** with published-date filters.
 - Reddit is a required source for this evaluation, not an optional enhancement. A live
   Exa probe on 2026-06-12 found no Reddit results for the earliest buffer window
-  (2023-12-01..2023-12-10) and sampled 2024-Q1 windows. The next implementation must
-  verify source availability before writing data and stop early if Reddit or another
-  required source is missing.
+  (2023-12-01..2023-12-10) and sampled 2024-Q1 windows. The source-availability gate
+  applies only to the `fetch_reddit_posts` builder step. Other tools are not gated by
+  this check and should be implemented, tested, collected into DuckDB, and summarized
+  independently.
 
 
 ## Plan of Work
@@ -426,30 +466,26 @@ Provide idempotent upsert helpers `put_tool_output(...)` and `put_prices(symbol,
 used by the builder (use `INSERT OR REPLACE`).
 
 Fourth, add the builder `src/trading_agents/evaluation/build_dataset.py` with a
-`build-eval-dataset` console entry point, but split it into two explicit phases. Phase 1
-is source availability verification and always runs before any DuckDB writes. It checks
-the earliest risky source window first: `buffer_start_date` through nine calendar days
-later (currently 2023-12-01 through 2023-12-10). For each ticker, call the Exa helpers
-for ticker news, Reddit, and StockTwits with a tiny limit such as 3, and call global
-news once for the same window. Treat fallback strings such as
-`No data available for Reddit posts for AAPL.` or `No news found ...` as unavailable.
-Because Reddit is required, missing Reddit must fail the command. On failure, print a
-compact source-by-source report and exit nonzero before opening or creating the DuckDB
-dataset.
-
-Phase 2 runs only after the availability gate passes. It downloads daily closes for
-each ticker and the benchmark over `buffer_start_date … end_date + price_tail_days` and
-fills `prices`; derives the trading-day list from the benchmark price index within the
-window; and for each ticker × trading day, records into `tool_outputs` the text from
-`get_stock_data_text`/`get_indicators_text` (called with the same
+`build-eval-dataset` console entry point and shared functions for each tool-specific
+dataset slice. The builder should download daily closes for each ticker and the
+benchmark over `buffer_start_date … end_date + price_tail_days`, fill `prices`, and
+derive the trading-day list from the benchmark price index within the window. For each
+ticker × trading day, the tool-specific builders record into `tool_outputs` the text
+from `get_stock_data_text`/`get_indicators_text` (called with the same
 `start = trade_date − lookback_days`, `end = trade_date` the eval flow uses), the Exa
-news and global-news blocks, the Exa Reddit and StockTwits blocks, and best-effort
-fundamentals/statement text. Use `EvalDataset.put_prices()` and `put_tool_output()` so
-the build is idempotent. Support `--tickers`, `--limit-days`, `--verify-only`, and
-`--scan-periods`. `--verify-only` runs Phase 1 and exits without creating the dataset.
-`--scan-periods` checks candidate 61-trading-day windows, such as later 2024 quarters
-and 2025-Q1, and reports whether every required source is available; it must not change
-`EvaluationSettings.start_date` or `end_date`.
+news and global-news blocks, the Exa StockTwits block, the Exa or RSS Reddit block, and
+best-effort fundamentals/statement text. Use `EvalDataset.put_prices()` and
+`put_tool_output()` so the build is idempotent. Support `--tickers`, `--limit-days`,
+and `--verify-only`; if `--scan-periods` is kept, it is Reddit-focused and must not
+change `EvaluationSettings.start_date` or `end_date`.
+
+The availability/status gate is not a global builder phase. It belongs only to the
+`fetch_reddit_posts` builder step because Reddit is required and has known historical
+coverage and rate-limit failure modes. That step checks the relevant source window,
+preserves structured statuses such as `ok`, `empty`, `blocked`, `rate_limited`,
+`timeout`, and `parse_error`, and stops before recording misleading Reddit payloads when
+source access is not usable. The gate must not prevent the other nine analyst tools from
+being implemented or collected.
 
 When implementing the `get_stock_data` portion, include the default benchmark ticker,
 SPY, in addition to AAPL, GOOGL, and AMZN. SPY is not just a calendar source: the
@@ -476,6 +512,12 @@ lesson for any Reddit dataset ingestion path: minimize request volume, preserve
 structured statuses such as `ok`, `empty`, `blocked`, `rate_limited`, `timeout`, and
 `parse_error`, and never collapse access failures into ordinary "No data available"
 strings during verification.
+
+After each dataset-building step is coded and validated with the needed focused tests,
+run the corresponding builder for both applicable datasets and summarize exactly what
+was collected. The summary should name the DuckDB file, tool name, tickers, date range,
+trading-day count, row count, and any source warnings. After the user reviews that
+summary, incorporate any feedback before moving to the next dataset source.
 
 Before changing the configured backtest dates for Plan B, run
 `uv run scan-reddit-coverage`. Treat its recommended quarter as the candidate
@@ -567,32 +609,38 @@ Run all commands from `/app/trading_agents`.
    rows through a temporary DuckDB file and confirm a dataset-backed eval tool returns the
    recorded payload.
 
-4. Before building any dataset, verify historical source availability (needs
-   `EXA_API_KEY` and network):
+4. Before building the Reddit payloads, verify Reddit source availability/status (needs
+   the configured Reddit historical source and network):
 
        uv run build-eval-dataset --verify-only
 
-   Expected if every required source is available: a source-by-source report showing
-   `available` for ticker news, global news, Reddit, and StockTwits for the earliest
-   risky buffer window, followed by a zero exit code and no DuckDB file creation.
+   Expected if Reddit is usable: a Reddit-focused report showing usable status for each
+   ticker over the configured probe window, followed by a zero exit code and no Reddit
+   payload writes when `--verify-only` is used.
 
    Expected if Reddit remains unavailable: a nonzero exit with a report naming the
    missing Reddit rows, for example `AAPL reddit unavailable for 2023-12-01..2023-12-10`.
-   In this case, stop and do not run the dataset build. Use the scan command below to
-   search for a viable replacement period:
+   In this case, stop the `fetch_reddit_posts` builder step and do not record misleading
+   Reddit payloads. This does not block collecting non-Reddit tool outputs. Use the scan
+   command below to search for a viable replacement period:
 
        uv run build-eval-dataset --scan-periods
 
-   Expected scan behavior: print candidate windows and whether all required sources are
-   available. Do not update settings or write the dataset automatically.
+   Expected scan behavior: print candidate windows and Reddit coverage/status. Do not
+   update settings or write the dataset automatically.
 
-5. Build a small dataset slice only after `--verify-only` passes:
+5. Build each small dataset slice after its code and focused tests pass:
 
        uv run build-eval-dataset --tickers AAPL --limit-days 3
 
-   Expected: a summary line reporting that `data/eval_dataset.duckdb` now holds
-   `tool_outputs` rows for the ten tool names × AAPL × 3 days, plus `prices` rows for AAPL
-   and SPY. Inspect with:
+   Expected for non-Reddit builders: collect the implemented source slice immediately
+   without waiting for the Reddit gate, then print a summary naming the DuckDB file, tool
+   name, tickers, covered trading days, row count, and warnings. Expected for the Reddit
+   builder: collect only after the Reddit availability/status gate succeeds.
+
+   When a new source builder is complete, run it for both Plan 07 and Plan B if the
+   source applies to both datasets, then summarize both collected slices for user
+   feedback. Inspect with:
 
        uv run python -c "from trading_agents.evaluation.dataset import EvalDataset; d=EvalDataset(); print(len(d.transaction_days()), 'days'); print(d.tool_output('get_stock_data','AAPL',d.transaction_days()[0])[:120])"
 
@@ -626,15 +674,16 @@ Acceptance is behavioral:
 - `uv run pytest tests/test_eval_backtest.py tests/test_eval_dataset.py` passes; the new
   tests fail on a clean checkout before this plan and pass after.
 - `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py`
-  passes after the builder is added. The builder tests must mock Exa/yfinance and assert
-  that verification failure prevents dataset writes.
-- `uv run build-eval-dataset --verify-only` performs the required-source check before
-  any DuckDB writes. If Reddit or another required source is unavailable, the command
-  exits nonzero with a clear report and does not create or update
-  `data/eval_dataset.duckdb`.
+  passes after the builder is added. The builder tests must mock Exa/yfinance/Reddit as
+  needed and assert that Reddit verification failure prevents Reddit payload writes.
+- `uv run build-eval-dataset --verify-only` performs the Reddit-specific status check
+  for the `fetch_reddit_posts` builder. If Reddit is unavailable, the command exits
+  nonzero with a clear report and does not create or update Reddit `tool_outputs` rows.
+  Non-Reddit builders are not blocked by this check.
 - `uv run build-eval-dataset --tickers AAPL --limit-days 3` produces a DuckDB file with
-  the expected `tool_outputs` and `prices` rows only after source verification passes,
-  and is idempotent (running it twice does not duplicate rows).
+  the expected implemented `tool_outputs` and `prices` rows, and is idempotent (running
+  it twice does not duplicate rows). For each newly implemented non-Reddit source, data
+  collection can proceed as soon as its code and tests pass.
 - `uv run run-eval --tickers AAPL --limit-days 3` produces a per-day rating list and a CR
   value while reading only from the dataset for analyst data (verifiable by running with
   network disabled, or by asserting in a test that the dataset-backed tools were used).
@@ -649,11 +698,12 @@ position is ever taken) as a percentage.
 
 ## Idempotence and Recovery
 
-The availability gate runs before any DuckDB connection is opened for writing. If
-`EXA_API_KEY` is missing, or if ticker news, global news, Reddit, or StockTwits is
-unavailable for the required probe window, the builder fails with a clear report and
-leaves the dataset untouched. `--verify-only` and `--scan-periods` are read-only with
-respect to `data/eval_dataset.duckdb`.
+The Reddit availability/status gate runs before writing Reddit `tool_outputs` rows. If
+Reddit is unavailable for the required probe window, the Reddit builder fails with a
+clear report and leaves existing non-Reddit dataset rows intact. Missing or degraded
+Reddit must not block collection for prices, `get_stock_data`, `get_indicators`,
+`get_news`, `get_global_news`, `fetch_stocktwits_messages`, or fundamentals/statement
+tools. `--verify-only` and `--scan-periods` are read-only with respect to Reddit writes.
 
 After the gate passes, the dataset build uses `INSERT OR REPLACE`, so it can be run
 repeatedly and partially (via `--tickers`/`--limit-days`) without duplicating rows;
@@ -670,12 +720,11 @@ tool/ticker/date so the gap is obvious rather than masked by empty input.
 
 Representative builder summary (illustrative):
 
-    Source availability check — 2023-12-01..2023-12-10
-    AAPL  news available | reddit unavailable | stocktwits available
-    GOOGL news available | reddit unavailable | stocktwits available
-    AMZN  news available | reddit unavailable | stocktwits available
-    global_news available
-    ERROR: required source unavailable; dataset was not written
+    Reddit availability/status check — 2023-12-01..2023-12-10
+    AAPL  reddit unavailable
+    GOOGL reddit unavailable
+    AMZN  reddit unavailable
+    ERROR: Reddit unavailable; Reddit payloads were not written. Non-Reddit builders may still run.
 
 Representative successful builder summary (illustrative):
 
@@ -753,13 +802,15 @@ In `src/trading_agents/evaluation/build_dataset.py`, define builder helpers with
 observable behaviors:
 
     def main(argv: list[str] | None = None) -> int: ...
-    def verify_source_availability(tickers: list[str]) -> "AvailabilityReport": ...
+    def verify_reddit_availability(tickers: list[str]) -> "AvailabilityReport": ...
     def build_dataset(tickers: list[str], limit_days: int | None = None) -> "BuildSummary": ...
+    def build_price_table(options: "BuildDatasetOptions", dataset: EvalDataset) -> "PriceBuildResult": ...
 
 `main()` parses `--verify-only`, `--tickers`, `--limit-days`, and `--scan-periods`.
-`verify_source_availability()` must return enough structured data for tests to assert
-which source failed, and `main()` must return a nonzero exit code when any required
-source is unavailable. `build_dataset()` must be called only after verification passes.
+`verify_reddit_availability()` must return enough structured data for tests to assert
+which Reddit status failed, and `main()` must return a nonzero exit code when Reddit is
+unavailable for the Reddit builder step. `build_dataset()` and the non-Reddit builders
+must not depend on Reddit verification.
 
 The analyst crew (`src/trading_agents/crews/analyst_crew/analyst_crew.py`) must keep its
 existing public functions `run_analyst_stage`, `prepare_analyst_inputs`, and
@@ -783,6 +834,16 @@ Revision Note: 2026-06-12 Split the pending dataset-builder task into a source
 availability gate, the actual DuckDB build phase, and a candidate-period scan fallback.
 This revision was made after the user raised historical availability as a major concern
 and confirmed that Reddit is required. A live Exa probe found early-window news,
-global-news, and StockTwits results but no Reddit results, so the plan now requires
-`build-eval-dataset --verify-only` to fail before DuckDB writes when any required source
-is unavailable.
+global-news, and StockTwits results but no Reddit results. This broad gate wording was
+superseded on 2026-06-17: the availability/status gate applies only to
+`fetch_reddit_posts`, and non-Reddit builders can collect data independently.
+
+Revision Note: 2026-06-17 Implemented and documented the shared yfinance price-table
+builder used by both Plan 07 and Plan B. This records buffered close prices and
+benchmark transaction days but does not complete the historical source gate or analyst
+tool-output recording.
+
+Revision Note: 2026-06-17 Clarified per user direction that the availability/status gate
+is only for `fetch_reddit_posts`. Non-Reddit dataset builders are not gated; once each
+builder is implemented and validated with focused tests, collect that slice into the
+corresponding DuckDB file(s) and summarize the collected coverage for user feedback.
