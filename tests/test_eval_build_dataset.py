@@ -497,6 +497,51 @@ def test_build_reddit_outputs_stores_all_posts_but_limits_replay_payload(
     assert "googl" in googl_payload
 
 
+def test_build_fundamentals_outputs_writes_tickers_only_and_reuses_snapshot(
+    monkeypatch, tmp_path
+):
+    calls = []
+
+    def fake_get_fundamentals_text(ticker):
+        calls.append(ticker)
+        return f"{ticker} fundamentals snapshot"
+
+    monkeypatch.setattr(
+        build_dataset, "get_fundamentals_text", fake_get_fundamentals_text
+    )
+    options = build_dataset.BuildDatasetOptions(
+        dataset_path=str(tmp_path / "eval.duckdb"),
+        tickers=("AAPL", "AAPL", "GOOGL"),
+        benchmark="SPY",
+        start_date="2025-12-02",
+        end_date="2025-12-04",
+        buffer_start_date="2025-12-01",
+        price_tail_days=2,
+        lookback_days=3,
+        weight_over=0.5,
+        weight_under=0.5,
+        limit_days=None,
+        verify_only=False,
+    )
+
+    with EvalDataset(options.dataset_path) as dataset:
+        result = build_dataset.build_fundamentals_outputs(
+            options, dataset, ["2025-12-02", "2025-12-03"]
+        )
+        aapl_first = dataset.tool_output("get_fundamentals", "AAPL", "2025-12-02")
+        aapl_second = dataset.tool_output("get_fundamentals", "AAPL", "2025-12-03")
+        googl_payload = dataset.tool_output("get_fundamentals", "GOOGL", "2025-12-03")
+
+    assert calls == ["AAPL", "GOOGL"]
+    assert result.tool_name == "get_fundamentals"
+    assert result.symbols == ("AAPL", "GOOGL")
+    assert result.payloads_written == 4
+    assert result.lookback_days == 0
+    assert aapl_first == "AAPL fundamentals snapshot"
+    assert aapl_second == aapl_first
+    assert googl_payload == "GOOGL fundamentals snapshot"
+
+
 def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
     dataset_path = tmp_path / "eval_dataset_2026q1.duckdb"
     monkeypatch.setattr(build_dataset, "PLAN_B_DATASET_PATH", str(dataset_path))
@@ -532,6 +577,11 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
         ),
     )
     monkeypatch.setattr(build_dataset, "fetch_reddit_posts_for_dataset", lambda **_: [])
+    monkeypatch.setattr(
+        build_dataset,
+        "get_fundamentals_text",
+        lambda ticker: f"{ticker} fundamentals snapshot",
+    )
 
     exit_code = build_dataset.plan_b_main(["--tickers", "AAPL", "--limit-days", "2"])
 
@@ -546,6 +596,7 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
     assert "get_news outputs built" in output
     assert "get_global_news outputs built" in output
     assert "fetch_reddit_posts outputs built" in output
+    assert "get_fundamentals outputs built" in output
     assert "payloads_written: 4" in output
     assert "payloads_written: 2" in output
     assert "remaining tool-output builders: pending" in output
@@ -558,3 +609,4 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
         assert dataset.tool_output("get_news", "AAPL", "2026-01-02")
         assert dataset.tool_output("get_global_news", "AAPL", "2026-01-02")
         assert dataset.tool_output("fetch_reddit_posts", "AAPL", "2026-01-02")
+        assert dataset.tool_output("get_fundamentals", "AAPL", "2026-01-02")
