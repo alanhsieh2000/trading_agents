@@ -634,6 +634,54 @@ def test_build_cashflow_outputs_writes_tickers_only_and_reuses_snapshot(
     assert googl_payload == "GOOGL Cash flow statement snapshot from cashflow"
 
 
+def test_build_income_statement_outputs_writes_tickers_only_and_reuses_snapshot(
+    monkeypatch, tmp_path
+):
+    calls = []
+
+    def fake_get_statement_text(ticker, statement_name, statement_attr):
+        calls.append((ticker, statement_name, statement_attr))
+        return f"{ticker} {statement_name} snapshot from {statement_attr}"
+
+    monkeypatch.setattr(build_dataset, "get_statement_text", fake_get_statement_text)
+    options = build_dataset.BuildDatasetOptions(
+        dataset_path=str(tmp_path / "eval.duckdb"),
+        tickers=("AAPL", "AAPL", "GOOGL"),
+        benchmark="SPY",
+        start_date="2025-12-02",
+        end_date="2025-12-04",
+        buffer_start_date="2025-12-01",
+        price_tail_days=2,
+        lookback_days=3,
+        weight_over=0.5,
+        weight_under=0.5,
+        limit_days=None,
+        verify_only=False,
+    )
+
+    with EvalDataset(options.dataset_path) as dataset:
+        result = build_dataset.build_income_statement_outputs(
+            options, dataset, ["2025-12-02", "2025-12-03"]
+        )
+        aapl_first = dataset.tool_output("get_income_statement", "AAPL", "2025-12-02")
+        aapl_second = dataset.tool_output("get_income_statement", "AAPL", "2025-12-03")
+        googl_payload = dataset.tool_output(
+            "get_income_statement", "GOOGL", "2025-12-03"
+        )
+
+    assert calls == [
+        ("AAPL", "Income statement", "income_stmt"),
+        ("GOOGL", "Income statement", "income_stmt"),
+    ]
+    assert result.tool_name == "get_income_statement"
+    assert result.symbols == ("AAPL", "GOOGL")
+    assert result.payloads_written == 4
+    assert result.lookback_days == 0
+    assert aapl_first == "AAPL Income statement snapshot from income_stmt"
+    assert aapl_second == aapl_first
+    assert googl_payload == "GOOGL Income statement snapshot from income_stmt"
+
+
 def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
     dataset_path = tmp_path / "eval_dataset_2026q1.duckdb"
     monkeypatch.setattr(build_dataset, "PLAN_B_DATASET_PATH", str(dataset_path))
@@ -698,6 +746,7 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
     assert "get_fundamentals outputs built" in output
     assert "get_balance_sheet outputs built" in output
     assert "get_cashflow outputs built" in output
+    assert "get_income_statement outputs built" in output
     assert "payloads_written: 4" in output
     assert "payloads_written: 2" in output
     assert "remaining tool-output builders: pending" in output
@@ -713,3 +762,4 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
         assert dataset.tool_output("get_fundamentals", "AAPL", "2026-01-02")
         assert dataset.tool_output("get_balance_sheet", "AAPL", "2026-01-02")
         assert dataset.tool_output("get_cashflow", "AAPL", "2026-01-02")
+        assert dataset.tool_output("get_income_statement", "AAPL", "2026-01-02")

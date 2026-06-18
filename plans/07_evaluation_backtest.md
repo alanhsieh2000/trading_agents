@@ -53,7 +53,7 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [x] Implement dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
 - [x] (2026-06-18 14:16Z) Implemented and populated shared dataset building for `get_balance_sheet`: records the yfinance latest balance-sheet statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_balance_sheet` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-08`; the evaluation-backed `get_balance_sheet` tool matched the live tool exactly and AAPL had one distinct payload across all 61 replay dates.
 - [x] (2026-06-18 14:24Z) Implemented and populated shared dataset building for `get_cashflow`: records the yfinance latest cash flow statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_cashflow` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-01-12`; the evaluation-backed `get_cashflow` tool matched the live tool exactly and each ticker had one distinct payload across all 61 replay dates.
-- [ ] (pending) Implement dataset building for `get_income_statement`: record best-effort income-statement text for each ticker and trading day.
+- [x] (2026-06-18 14:30Z) Implemented and populated shared dataset building for `get_income_statement`: records the yfinance latest income statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_income_statement` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AMZN on `2024-02-28`; the evaluation-backed `get_income_statement` tool matched the live tool exactly and each ticker had one distinct payload across all 61 replay dates.
 - [ ] (pending) If the Reddit availability/status gate fails for the configured 2024-Q1 evaluation, scan candidate replacement periods and record findings before recording Reddit payloads.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/eval_tools.py` (dataset-backed `DatasetBackedTool` + `build_dataset_tools`). Remaining: the analyst-crew tool-injection seam.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/backtest.py` (`simulate_position` + `cumulative_return`).
@@ -410,6 +410,25 @@ cash-flow statement writer in the shared builder path used by Plan 07 and Plan B
 The same cashflow payload is expected on later replay dates for a ticker because the
 live yfinance cashflow endpoint exposes the latest available cash-flow statement table,
 not a daily historical statement feed.
+
+Milestone 8 — Shared `get_income_statement` tool-output builder (2026-06-18). Added
+the income-statement writer in the shared builder path used by Plan 07 and Plan B:
+
+- `build_income_statement_outputs()` records `get_income_statement` payloads for each
+  selected ticker on each benchmark transaction day, keyed by
+  `(tool_name, ticker, as_of_date)`.
+- The payload is rendered through the existing
+  `get_statement_text(ticker, "Income statement", "income_stmt")` helper, matching
+  the live tool's text format.
+- Focused validation passed:
+  `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`
+  reported 55 passed.
+- Live population wrote 183 `get_income_statement` rows to `data/eval_dataset.duckdb`.
+  A random replay check for AMZN on `2024-02-28` matched the live tool exactly.
+
+The same income-statement payload is expected on later replay dates for a ticker because
+the live yfinance income-statement endpoint exposes the latest available income
+statement table, not a daily historical statement feed.
 
 
 ## Context and Orientation

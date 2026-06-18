@@ -44,7 +44,7 @@ The concrete result values above are illustrative. The final implementation must
 - [x] Implement Plan B dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
 - [x] (2026-06-18 14:16Z) Implemented and populated Plan B dataset building for `get_balance_sheet` through the shared Plan 07 builder path: records the yfinance latest balance-sheet statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_balance_sheet` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2026-01-21`; the evaluation-backed `get_balance_sheet` tool matched the live tool exactly and AAPL had one distinct payload across all 61 replay dates.
 - [x] (2026-06-18 14:24Z) Implemented and populated Plan B dataset building for `get_cashflow` through the shared Plan 07 builder path: records the yfinance latest cash flow statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_cashflow` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2026-01-09`; the evaluation-backed `get_cashflow` tool matched the live tool exactly and each ticker had one distinct payload across all 61 replay dates.
-- [ ] (pending) Implement Plan B dataset building for `get_income_statement`: record best-effort income-statement text for each ticker and trading day.
+- [x] (2026-06-18 14:30Z) Implemented and populated Plan B dataset building for `get_income_statement` through the shared Plan 07 builder path: records the yfinance latest income statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_income_statement` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used GOOGL on `2026-03-18`; the evaluation-backed `get_income_statement` tool matched the live tool exactly and each ticker had one distinct payload across all 61 replay dates.
 - [ ] (pending) Run a Plan B smoke evaluation, for example AAPL over three trading days, and record the observed command output.
 - [ ] (pending) Run the full Plan B evaluation for AAPL, GOOGL, and AMZN over the 61 trading days and record CR per stock in `Outcomes & Retrospective`.
 
@@ -258,6 +258,25 @@ cash-flow statement writer that Plan B shares with Plan 07:
 The same cashflow payload is expected on later replay dates for a ticker because the
 live yfinance cashflow endpoint exposes the latest available cash-flow statement table,
 not a daily historical statement feed.
+
+Milestone 9 — Shared `get_income_statement` tool-output builder (2026-06-18). Added
+the income-statement writer that Plan B shares with Plan 07:
+
+- `build_income_statement_outputs()` records `get_income_statement` payloads for each
+  selected ticker on each SPY-derived transaction day.
+- The payload is rendered through the existing
+  `get_statement_text(ticker, "Income statement", "income_stmt")` helper, matching
+  the live tool's text format.
+- Focused validation passed:
+  `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`
+  reported 55 passed.
+- Live population wrote 183 `get_income_statement` rows to
+  `data/eval_dataset_2026q1.duckdb`. A random replay check for GOOGL on `2026-03-18`
+  matched the live tool exactly.
+
+The same income-statement payload is expected on later replay dates for a ticker because
+the live yfinance income-statement endpoint exposes the latest available income
+statement table, not a daily historical statement feed.
 
 When the Plan B dataset and full run are complete, update this section with:
 

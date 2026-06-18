@@ -107,6 +107,7 @@ class DatasetBuildResult:
     fundamentals_result: ToolOutputBuildResult
     balance_sheet_result: ToolOutputBuildResult
     cashflow_result: ToolOutputBuildResult
+    income_statement_result: ToolOutputBuildResult
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -596,6 +597,23 @@ def build_cashflow_outputs(
     )
 
 
+def build_income_statement_outputs(
+    options: BuildDatasetOptions,
+    dataset: EvalDataset,
+    transaction_days: Sequence[str],
+) -> ToolOutputBuildResult:
+    """Record replayable ``get_income_statement`` payloads for each ticker and day."""
+    return build_snapshot_tool_outputs(
+        tool_name="get_income_statement",
+        render_payload=lambda ticker: get_statement_text(
+            ticker, "Income statement", "income_stmt"
+        ),
+        options=options,
+        dataset=dataset,
+        transaction_days=transaction_days,
+    )
+
+
 def render_reddit_payload(
     ticker: str,
     as_of_date: str,
@@ -694,6 +712,9 @@ def build_dataset(options: BuildDatasetOptions) -> DatasetBuildResult:
         cashflow_result = build_cashflow_outputs(
             options, dataset, price_result.transaction_days
         )
+        income_statement_result = build_income_statement_outputs(
+            options, dataset, price_result.transaction_days
+        )
         return DatasetBuildResult(
             price_result=price_result,
             stock_data_result=stock_data_result,
@@ -704,6 +725,7 @@ def build_dataset(options: BuildDatasetOptions) -> DatasetBuildResult:
             fundamentals_result=fundamentals_result,
             balance_sheet_result=balance_sheet_result,
             cashflow_result=cashflow_result,
+            income_statement_result=income_statement_result,
         )
 
 
@@ -773,6 +795,7 @@ def render_dataset_result(result: DatasetBuildResult) -> str:
             render_tool_output_result(result.fundamentals_result),
             render_tool_output_result(result.balance_sheet_result),
             render_tool_output_result(result.cashflow_result),
+            render_tool_output_result(result.income_statement_result),
             "remaining tool-output builders: pending",
         ]
     )
