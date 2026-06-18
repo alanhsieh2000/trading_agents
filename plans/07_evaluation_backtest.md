@@ -52,7 +52,7 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [ ] (pending) Implement dataset building for `fetch_stocktwits_messages`: record StockTwits sentiment text and distinguish empty results from source access failures where possible.
 - [x] Implement dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
 - [x] (2026-06-18 14:16Z) Implemented and populated shared dataset building for `get_balance_sheet`: records the yfinance latest balance-sheet statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_balance_sheet` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-08`; the evaluation-backed `get_balance_sheet` tool matched the live tool exactly and AAPL had one distinct payload across all 61 replay dates.
-- [ ] (pending) Implement dataset building for `get_cashflow`: record best-effort cashflow text for each ticker and trading day.
+- [x] (2026-06-18 14:24Z) Implemented and populated shared dataset building for `get_cashflow`: records the yfinance latest cash flow statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_cashflow` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-01-12`; the evaluation-backed `get_cashflow` tool matched the live tool exactly and each ticker had one distinct payload across all 61 replay dates.
 - [ ] (pending) Implement dataset building for `get_income_statement`: record best-effort income-statement text for each ticker and trading day.
 - [ ] (pending) If the Reddit availability/status gate fails for the configured 2024-Q1 evaluation, scan candidate replacement periods and record findings before recording Reddit payloads.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/eval_tools.py` (dataset-backed `DatasetBackedTool` + `build_dataset_tools`). Remaining: the analyst-crew tool-injection seam.
@@ -391,6 +391,24 @@ first financial-statement writer in the shared builder path used by Plan 07 and 
 
 The same balance-sheet payload is expected on later replay dates for a ticker because
 the live yfinance balance-sheet endpoint exposes the latest available statement table,
+not a daily historical statement feed.
+
+Milestone 7 — Shared `get_cashflow` tool-output builder (2026-06-18). Added the
+cash-flow statement writer in the shared builder path used by Plan 07 and Plan B:
+
+- `build_cashflow_outputs()` records `get_cashflow` payloads for each selected ticker
+  on each benchmark transaction day, keyed by `(tool_name, ticker, as_of_date)`.
+- The payload is rendered through the existing
+  `get_statement_text(ticker, "Cash flow statement", "cashflow")` helper, matching
+  the live tool's text format.
+- Focused validation passed:
+  `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`
+  reported 54 passed.
+- Live population wrote 183 `get_cashflow` rows to `data/eval_dataset.duckdb`.
+  A random replay check for AAPL on `2024-01-12` matched the live tool exactly.
+
+The same cashflow payload is expected on later replay dates for a ticker because the
+live yfinance cashflow endpoint exposes the latest available cash-flow statement table,
 not a daily historical statement feed.
 
 
