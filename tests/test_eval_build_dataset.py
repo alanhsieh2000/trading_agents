@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pandas as pd
 import pytest
 
 from trading_agents.config import get_settings
 from trading_agents.evaluation.dataset import EvalDataset
 from trading_agents.evaluation import build_dataset
+from trading_agents.evaluation.reddit_coverage import RedditPost
 
 
 @pytest.fixture(autouse=True)
@@ -43,6 +46,18 @@ def test_options_use_plan_b_defaults_when_requested():
     assert options.start_date == "2026-01-01"
     assert options.end_date == "2026-03-31"
     assert options.buffer_start_date == "2025-12-01"
+    assert options.reddit_limit_per_sub == 5
+    assert options.reddit_request_delay_seconds == 10.0
+
+
+def test_reddit_cli_overrides_are_configurable():
+    args = build_dataset.parse_args(
+        ["--verify-only", "--reddit-delay", "0", "--reddit-limit-per-sub", "2"]
+    )
+    options = build_dataset.options_from_settings(args, plan_b_defaults=True)
+
+    assert options.reddit_request_delay_seconds == 0.0
+    assert options.reddit_limit_per_sub == 2
 
 
 def test_tickers_cli_override_settings():
@@ -389,6 +404,99 @@ def test_build_global_news_outputs_records_fetch_errors(monkeypatch, tmp_path):
     assert googl_payload == aapl_payload
 
 
+def _reddit_post(
+    ticker: str,
+    subreddit: str,
+    yyyy_mm_dd: str,
+    title: str | None = None,
+) -> RedditPost:
+    published_at = datetime.fromisoformat(yyyy_mm_dd + "T12:00:00+00:00")
+    return RedditPost(
+        ticker=ticker,
+        subreddit=subreddit,
+        title=title or f"{ticker} {subreddit} {yyyy_mm_dd}",
+        published_at=published_at,
+        published_date=published_at.date(),
+        url=f"https://reddit.example/comments/{ticker}-{subreddit}-{yyyy_mm_dd}/x",
+        body=f"{ticker} body {yyyy_mm_dd}",
+    )
+
+
+def test_fetch_reddit_posts_for_dataset_or_joins_aliases_and_keeps_all(monkeypatch):
+    calls = []
+    sleeps = []
+
+    def fake_fetch_rss_posts(*, ticker, subreddit, query):
+        calls.append((ticker, subreddit, query))
+        return [_reddit_post(ticker, subreddit, "2026-01-02")]
+
+    monkeypatch.setattr(build_dataset, "fetch_rss_posts", fake_fetch_rss_posts)
+    monkeypatch.setattr(build_dataset.time, "sleep", sleeps.append)
+
+    posts = build_dataset.fetch_reddit_posts_for_dataset(
+        tickers=("AAPL", "GOOGL"),
+        subreddits=("stocks", "investing"),
+        request_delay_seconds=10.0,
+    )
+
+    assert len(posts) == 4
+    assert calls == [
+        ("AAPL", "stocks", "AAPL OR $AAPL OR Apple"),
+        ("AAPL", "investing", "AAPL OR $AAPL OR Apple"),
+        ("GOOGL", "stocks", "GOOGL OR $GOOGL OR Google"),
+        ("GOOGL", "investing", "GOOGL OR $GOOGL OR Google"),
+    ]
+    assert sleeps == [10.0, 10.0, 10.0]
+
+
+def test_build_reddit_outputs_stores_all_posts_but_limits_replay_payload(
+    monkeypatch, tmp_path
+):
+    posts = [
+        _reddit_post("AAPL", "stocks", "2026-01-01", "old"),
+        _reddit_post("AAPL", "stocks", "2026-01-02", "new"),
+        _reddit_post("AAPL", "investing", "2026-01-02", "investing"),
+        _reddit_post("GOOGL", "stocks", "2026-01-02", "googl"),
+    ]
+
+    monkeypatch.setattr(
+        build_dataset,
+        "fetch_reddit_posts_for_dataset",
+        lambda **_kwargs: posts,
+    )
+    options = build_dataset.BuildDatasetOptions(
+        dataset_path=str(tmp_path / "eval.duckdb"),
+        tickers=("AAPL", "GOOGL"),
+        benchmark="SPY",
+        start_date="2026-01-02",
+        end_date="2026-01-02",
+        buffer_start_date="2025-12-01",
+        price_tail_days=2,
+        lookback_days=3,
+        weight_over=0.5,
+        weight_under=0.5,
+        limit_days=None,
+        verify_only=False,
+        reddit_limit_per_sub=1,
+        reddit_request_delay_seconds=10.0,
+    )
+
+    with EvalDataset(options.dataset_path) as dataset:
+        result = build_dataset.build_reddit_outputs(options, dataset, ["2026-01-02"])
+        raw_rows = dataset.reddit_post_rows()
+        aapl_payload = dataset.tool_output("fetch_reddit_posts", "AAPL", "2026-01-02")
+        googl_payload = dataset.tool_output("fetch_reddit_posts", "GOOGL", "2026-01-02")
+
+    assert result.tool_name == "fetch_reddit_posts"
+    assert result.posts_written == 4
+    assert result.payloads_written == 2
+    assert len(raw_rows) == 4
+    assert "new" in aapl_payload
+    assert "old" not in aapl_payload
+    assert "investing" in aapl_payload
+    assert "googl" in googl_payload
+
+
 def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
     dataset_path = tmp_path / "eval_dataset_2026q1.duckdb"
     monkeypatch.setattr(build_dataset, "PLAN_B_DATASET_PATH", str(dataset_path))
@@ -423,6 +531,7 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
             f"global news {curr_date} {look_back_days} {limit}"
         ),
     )
+    monkeypatch.setattr(build_dataset, "fetch_reddit_posts_for_dataset", lambda **_: [])
 
     exit_code = build_dataset.plan_b_main(["--tickers", "AAPL", "--limit-days", "2"])
 
@@ -436,6 +545,7 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
     assert "get_indicators outputs built" in output
     assert "get_news outputs built" in output
     assert "get_global_news outputs built" in output
+    assert "fetch_reddit_posts outputs built" in output
     assert "payloads_written: 4" in output
     assert "payloads_written: 2" in output
     assert "remaining tool-output builders: pending" in output
@@ -447,3 +557,4 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
         assert dataset.tool_output("get_indicators", "AAPL", "2026-01-02")
         assert dataset.tool_output("get_news", "AAPL", "2026-01-02")
         assert dataset.tool_output("get_global_news", "AAPL", "2026-01-02")
+        assert dataset.tool_output("fetch_reddit_posts", "AAPL", "2026-01-02")

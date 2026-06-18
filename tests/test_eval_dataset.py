@@ -40,6 +40,46 @@ def test_close_series_sorted_ascending(dataset):
     ]
 
 
+def test_reddit_post_rows_round_trip_keeps_ticker_specific_matches(dataset):
+    rows = [
+        (
+            "aapl",
+            "stocks",
+            "2026-01-02T12:00:00+00:00",
+            "2026-01-02",
+            "https://reddit.example/comments/abc/shared",
+            "AAPL title",
+            "AAPL body",
+        ),
+        (
+            "googl",
+            "stocks",
+            "2026-01-02T12:00:00+00:00",
+            "2026-01-02",
+            "https://reddit.example/comments/abc/shared",
+            "GOOGL title",
+            "GOOGL body",
+        ),
+    ]
+
+    dataset.put_reddit_posts(rows)
+    dataset.put_reddit_posts([rows[0][:-1] + ("AAPL body v2",)])
+
+    all_rows = dataset.reddit_post_rows()
+    assert len(all_rows) == 2
+    assert dataset.reddit_post_rows("AAPL") == [
+        {
+            "ticker": "AAPL",
+            "subreddit": "stocks",
+            "published_at": "2026-01-02T12:00:00+00:00",
+            "published_date": "2026-01-02",
+            "url": "https://reddit.example/comments/abc/shared",
+            "title": "AAPL title",
+            "body": "AAPL body v2",
+        }
+    ]
+
+
 def test_transaction_days_filters_to_window(dataset):
     dataset.put_prices(
         "SPY",

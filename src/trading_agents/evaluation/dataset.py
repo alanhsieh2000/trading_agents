@@ -10,6 +10,9 @@ The dataset holds two tables:
 - ``prices(symbol, date, close)`` — daily close prices for the evaluated
   tickers and the benchmark across the buffered range, used by the exchange
   simulator and by the portfolio stage's realized-return fetcher.
+- ``reddit_posts(ticker, subreddit, url, ...)`` — the raw RSS posts collected
+  for the Plan B Reddit buffer, kept separately from the small replay payloads
+  so reruns can audit what was available from Reddit.
 
 Both tables use a primary key so the builder can upsert idempotently with
 ``INSERT OR REPLACE``: rerunning the builder refreshes rows rather than
@@ -67,6 +70,20 @@ class EvalDataset:
             )
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reddit_posts (
+                ticker         TEXT NOT NULL,
+                subreddit      TEXT NOT NULL,
+                published_at   TEXT NOT NULL,
+                published_date TEXT NOT NULL,
+                url            TEXT NOT NULL,
+                title          TEXT NOT NULL,
+                body           TEXT NOT NULL,
+                PRIMARY KEY (ticker, subreddit, url)
+            )
+            """
+        )
 
     # -- writes ---------------------------------------------------------------
 
@@ -87,6 +104,29 @@ class EvalDataset:
         self._conn.executemany(
             "INSERT OR REPLACE INTO prices (symbol, date, close) VALUES (?, ?, ?)",
             [(symbol.upper(), date, float(close)) for date, close in rows],
+        )
+
+    def put_reddit_posts(
+        self,
+        rows: list[tuple[str, str, str, str, str, str, str]],
+    ) -> None:
+        """Upsert raw Reddit RSS posts.
+
+        Rows are ``(ticker, subreddit, published_at, published_date, url, title,
+        body)``. The primary key intentionally includes ``ticker`` because one
+        Reddit post can be relevant to more than one ticker query.
+        """
+        if not rows:
+            return
+        self._conn.executemany(
+            "INSERT OR REPLACE INTO reddit_posts "
+            "(ticker, subreddit, published_at, published_date, url, title, body) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (ticker.upper(), subreddit, published_at, published_date, url, title, body)
+                for ticker, subreddit, published_at, published_date, url, title, body
+                in rows
+            ],
         )
 
     # -- reads ----------------------------------------------------------------
@@ -117,6 +157,31 @@ class EvalDataset:
             [symbol.upper()],
         ).fetchall()
         return [(str(date), float(close)) for date, close in rows]
+
+    def reddit_post_rows(self, ticker: str | None = None) -> list[dict[str, str]]:
+        """Return raw Reddit post rows sorted by ticker/date/subreddit."""
+        if ticker is None:
+            rows = self._conn.execute(
+                "SELECT ticker, subreddit, published_at, published_date, url, title, body "
+                "FROM reddit_posts ORDER BY ticker, published_at, subreddit, url"
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT ticker, subreddit, published_at, published_date, url, title, body "
+                "FROM reddit_posts WHERE ticker = ? "
+                "ORDER BY ticker, published_at, subreddit, url",
+                [ticker.upper()],
+            ).fetchall()
+        keys = (
+            "ticker",
+            "subreddit",
+            "published_at",
+            "published_date",
+            "url",
+            "title",
+            "body",
+        )
+        return [dict(zip(keys, (str(value) for value in row), strict=True)) for row in rows]
 
     def transaction_days(
         self,

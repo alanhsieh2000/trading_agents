@@ -9,6 +9,7 @@ backtest mechanics remain comparable.
 from __future__ import annotations
 
 import argparse
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Sequence
@@ -21,6 +22,11 @@ from trading_agents.evaluation.dataset import EvalDataset
 from trading_agents.evaluation.exa_sources import (
     fetch_global_news_via_exa,
     fetch_news_via_exa,
+)
+from trading_agents.evaluation.reddit_coverage import (
+    DEFAULT_QUERY_ALIASES,
+    RedditPost,
+    fetch_rss_posts,
 )
 from trading_agents.tools.market_data import (
     ALLOWED_INDICATORS,
@@ -53,6 +59,8 @@ class BuildDatasetOptions:
     news_limit: int = 40
     global_news_limit: int = 20
     global_news_lookback_days: int = 7
+    reddit_limit_per_sub: int = 5
+    reddit_request_delay_seconds: float = 10.0
 
 
 @dataclass(frozen=True)
@@ -74,12 +82,26 @@ class ToolOutputBuildResult:
 
 
 @dataclass(frozen=True)
+class RedditBuildResult:
+    tool_name: str
+    symbols: tuple[str, ...]
+    subreddits: tuple[str, ...]
+    posts_written: int
+    payloads_written: int
+    transaction_days: tuple[str, ...]
+    lookback_days: int
+    payload_limit_per_sub: int
+    request_delay_seconds: float
+
+
+@dataclass(frozen=True)
 class DatasetBuildResult:
     price_result: PriceBuildResult
     stock_data_result: ToolOutputBuildResult
     indicators_result: ToolOutputBuildResult
     news_result: ToolOutputBuildResult
     global_news_result: ToolOutputBuildResult
+    reddit_result: RedditBuildResult
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -100,6 +122,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--limit-days",
         type=int,
         help="Optional trading-day limit for smoke dataset builds.",
+    )
+    parser.add_argument(
+        "--reddit-delay",
+        type=float,
+        help=(
+            "Seconds to sleep between Reddit RSS requests. Plan B defaults to "
+            "at least 10 seconds to avoid unauthenticated Reddit rate limits."
+        ),
+    )
+    parser.add_argument(
+        "--reddit-limit-per-sub",
+        type=int,
+        help="Replay payload post limit per subreddit. Raw fetched posts are still stored.",
     )
     return parser.parse_args(argv)
 
@@ -132,6 +167,20 @@ def options_from_settings(
         news_limit=settings.news.ticker_limit * 2,
         global_news_limit=settings.news.global_limit * 2,
         global_news_lookback_days=settings.news.global_lookback_days,
+        reddit_limit_per_sub=(
+            settings.sentiment.reddit_limit_per_sub
+            if args.reddit_limit_per_sub is None
+            else max(args.reddit_limit_per_sub, 0)
+        ),
+        reddit_request_delay_seconds=(
+            max(settings.sentiment.reddit_inter_request_delay, 10.0)
+            if args.reddit_delay is None and plan_b_defaults
+            else (
+                settings.sentiment.reddit_inter_request_delay
+                if args.reddit_delay is None
+                else max(args.reddit_delay, 0.0)
+            )
+        ),
     )
 
 
@@ -153,6 +202,8 @@ def render_options(options: BuildDatasetOptions) -> str:
             f"news_limit: {options.news_limit}",
             f"global_news_limit: {options.global_news_limit}",
             f"global_news_lookback_days: {options.global_news_lookback_days}",
+            f"reddit_limit_per_sub: {options.reddit_limit_per_sub}",
+            f"reddit_request_delay_seconds: {options.reddit_request_delay_seconds}",
         ]
     )
 
@@ -386,6 +437,150 @@ def build_global_news_outputs(
     )
 
 
+def fetch_reddit_posts_for_dataset(
+    *,
+    tickers: Sequence[str],
+    subreddits: Sequence[str],
+    request_delay_seconds: float,
+) -> list[RedditPost]:
+    """Fetch the raw Plan B Reddit RSS buffer.
+
+    Alias terms are OR-joined so each ``(ticker, subreddit)`` costs one RSS
+    request. The returned list is not globally deduped because the dataset keeps
+    ticker-specific relevance when one post matches multiple ticker queries.
+    """
+    posts: list[RedditPost] = []
+    first = True
+    for ticker in tickers:
+        symbol = ticker.upper().strip()
+        aliases = DEFAULT_QUERY_ALIASES.get(symbol, (symbol,))
+        query = " OR ".join(alias for alias in aliases if alias) or symbol
+        for subreddit in subreddits:
+            if not first and request_delay_seconds > 0:
+                time.sleep(request_delay_seconds)
+            first = False
+            posts.extend(
+                fetch_rss_posts(ticker=symbol, subreddit=subreddit, query=query)
+            )
+    return posts
+
+
+def build_reddit_outputs(
+    options: BuildDatasetOptions,
+    dataset: EvalDataset,
+    transaction_days: Sequence[str],
+) -> RedditBuildResult:
+    """Record raw Reddit posts and replayable ``fetch_reddit_posts`` payloads."""
+    settings = get_settings()
+    symbols = _symbols_for_indicator_outputs(options)
+    subreddits = tuple(settings.sentiment.reddit_subreddits)
+    posts = fetch_reddit_posts_for_dataset(
+        tickers=symbols,
+        subreddits=subreddits,
+        request_delay_seconds=options.reddit_request_delay_seconds,
+    )
+    dataset.put_reddit_posts([_reddit_post_row(post) for post in posts])
+
+    payloads_written = 0
+    for symbol in symbols:
+        symbol_posts = [post for post in posts if post.ticker == symbol]
+        for as_of_date in transaction_days:
+            payload = render_reddit_payload(
+                symbol,
+                as_of_date,
+                symbol_posts,
+                subreddits=subreddits,
+                lookback_days=options.lookback_days,
+                limit_per_sub=options.reddit_limit_per_sub,
+            )
+            dataset.put_tool_output("fetch_reddit_posts", symbol, as_of_date, payload)
+            payloads_written += 1
+
+    return RedditBuildResult(
+        tool_name="fetch_reddit_posts",
+        symbols=symbols,
+        subreddits=subreddits,
+        posts_written=len(posts),
+        payloads_written=payloads_written,
+        transaction_days=tuple(transaction_days),
+        lookback_days=options.lookback_days,
+        payload_limit_per_sub=options.reddit_limit_per_sub,
+        request_delay_seconds=options.reddit_request_delay_seconds,
+    )
+
+
+def render_reddit_payload(
+    ticker: str,
+    as_of_date: str,
+    posts: Sequence[RedditPost],
+    *,
+    subreddits: Sequence[str],
+    lookback_days: int,
+    limit_per_sub: int,
+) -> str:
+    """Render the small prompt payload from the full raw Reddit buffer."""
+    symbol = ticker.upper().strip()
+    end_date = _parse_date(as_of_date)
+    start_date = end_date - timedelta(days=lookback_days)
+    blocks: list[str] = []
+    total_posts = 0
+    effective_limit = max(limit_per_sub, 0)
+
+    for subreddit in subreddits:
+        matching = sorted(
+            (
+                post
+                for post in posts
+                if post.ticker == symbol
+                and post.subreddit == subreddit
+                and start_date <= post.published_date <= end_date
+            ),
+            key=lambda post: post.published_at,
+            reverse=True,
+        )
+        selected = matching[:effective_limit]
+        total_posts += len(selected)
+        if not selected:
+            blocks.append(f"r/{subreddit}: ")
+            continue
+
+        lines = [
+            f"r/{subreddit} - {len(selected)} recent posts mentioning {symbol} "
+            "(via RSS feed; scores/comments unavailable):"
+        ]
+        for post in selected:
+            body = _trim_text(" ".join(post.body.split()), 240)
+            lines.append(
+                f" [{post.published_date.isoformat()}] {' '.join(post.title.split())}"
+                + (f"\n body excerpt: {body}" if body else "")
+            )
+        blocks.append("\n".join(lines))
+
+    if total_posts == 0:
+        return f"No data available for Reddit posts for {symbol}."
+    return "\n\n".join(blocks)
+
+
+def _reddit_post_row(post: RedditPost) -> tuple[str, str, str, str, str, str, str]:
+    return (
+        post.ticker,
+        post.subreddit,
+        post.published_at.isoformat(),
+        post.published_date.isoformat(),
+        post.url,
+        post.title,
+        post.body,
+    )
+
+
+def _trim_text(value: str, max_length: int) -> str:
+    if len(value) <= max_length:
+        return value
+    if max_length <= 1:
+        return value[:max_length]
+    return value[:max_length] + "..."
+
+
 def build_dataset(options: BuildDatasetOptions) -> DatasetBuildResult:
     """Build the currently implemented shared dataset pieces."""
     with EvalDataset(options.dataset_path) as dataset:
@@ -400,12 +595,16 @@ def build_dataset(options: BuildDatasetOptions) -> DatasetBuildResult:
         global_news_result = build_global_news_outputs(
             options, dataset, price_result.transaction_days
         )
+        reddit_result = build_reddit_outputs(
+            options, dataset, price_result.transaction_days
+        )
         return DatasetBuildResult(
             price_result=price_result,
             stock_data_result=stock_data_result,
             indicators_result=indicators_result,
             news_result=news_result,
             global_news_result=global_news_result,
+            reddit_result=reddit_result,
         )
 
 
@@ -443,6 +642,26 @@ def render_tool_output_result(result: ToolOutputBuildResult) -> str:
     )
 
 
+def render_reddit_result(result: RedditBuildResult) -> str:
+    first_day = result.transaction_days[0] if result.transaction_days else "n/a"
+    last_day = result.transaction_days[-1] if result.transaction_days else "n/a"
+    return "\n".join(
+        [
+            f"{result.tool_name} outputs built",
+            f"symbols: {', '.join(result.symbols)}",
+            f"subreddits: {', '.join(result.subreddits)}",
+            f"posts_written: {result.posts_written}",
+            f"payloads_written: {result.payloads_written}",
+            f"transaction_days: {len(result.transaction_days)}",
+            f"first_transaction_day: {first_day}",
+            f"last_transaction_day: {last_day}",
+            f"lookback_days: {result.lookback_days}",
+            f"payload_limit_per_sub: {result.payload_limit_per_sub}",
+            f"request_delay_seconds: {result.request_delay_seconds}",
+        ]
+    )
+
+
 def render_dataset_result(result: DatasetBuildResult) -> str:
     return "\n".join(
         [
@@ -451,6 +670,7 @@ def render_dataset_result(result: DatasetBuildResult) -> str:
             render_tool_output_result(result.indicators_result),
             render_tool_output_result(result.news_result),
             render_tool_output_result(result.global_news_result),
+            render_reddit_result(result.reddit_result),
             "remaining tool-output builders: pending",
         ]
     )
