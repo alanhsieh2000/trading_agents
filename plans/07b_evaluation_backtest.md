@@ -39,7 +39,7 @@ The concrete result values above are illustrative. The final implementation must
 - [x] (2026-06-17) Implemented and populated Plan B dataset building for `get_indicators` through the shared Plan 07 builder path: records all allowed indicators from `src/trading_agents/tools/market_data.py` for each configured ticker and trading day using the analyst-stage lookback window. Wrote 183 persistent `get_indicators` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero SPY indicator rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison matched for `AMZN` on `2026-02-27` with 12 indicators.
 - [x] (2026-06-17 13:03Z) Implemented and populated Plan B dataset building for `get_news` through the shared Plan 07 builder path: records ticker-news text through the Exa historical source layer with the same markdown/no-news/error contract as the live Yahoo-backed tool. The builder uses a doubled news limit (`settings.news.ticker_limit * 2`, currently 40) for buffer coverage and writes ticker rows only. Wrote 183 persistent `get_news` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`.
 - [x] (2026-06-17) Implemented and populated Plan B dataset building for `get_global_news` through the shared Plan 07 builder path: records one Exa historical global-market-news payload per trading day, stores it under each evaluated ticker key for existing dataset-backed tool replay, and uses a doubled global-news limit (`settings.news.global_limit * 2`, currently 20). Wrote 183 persistent `get_global_news` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Source warning: Exa returned HTTP 402 credit-limit errors after 52 successful days, so 27 rows across 9 dates currently contain explicit `Error fetching global news ... exceeded your credits limit` payloads; zero rows use the no-news fallback. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2026-01-16`; the evaluation-backed `get_global_news` tool matched the DuckDB payload exactly and returned the shared global payload for all ticker keys on that date.
-- [ ] (pending) Implement Plan B dataset building for `fetch_reddit_posts`: record Reddit sentiment text for the chosen 2026-Q1 period using the fixed Reddit RSS/request-volume handling, with explicit handling for rate limits, blocked access, empty results, and parse failures.
+- [x] (2026-06-18 07:22Z) Implemented and populated Plan B dataset building for `fetch_reddit_posts`: added a raw `reddit_posts` DuckDB table, collected Reddit RSS with OR-joined aliases and a 10-second inter-request delay, stored all fetched raw posts, and generated capped replay payloads for each ticker/trading day. Wrote 900 raw Reddit post rows to `data/eval_dataset_2026q1.duckdb` (AAPL 300, GOOGL 300, AMZN 300) and 183 persistent `fetch_reddit_posts` rows in `tool_outputs` (3 tickers times 61 transaction days). Focused validation passed with `uv run pytest tests/test_eval_dataset.py tests/test_eval_build_dataset.py tests/test_eval_reddit_coverage.py`; `ruff` was unavailable in the environment. Reddit returned multiple bounded HTTP 429 retries during population, but the run completed.
 - [ ] (pending) Implement Plan B dataset building for `fetch_stocktwits_messages`: record StockTwits sentiment text and distinguish empty results from source access failures where possible.
 - [ ] (pending) Implement Plan B dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
 - [ ] (pending) Implement Plan B dataset building for `get_balance_sheet`: record best-effort balance-sheet text for each ticker and trading day.
@@ -90,6 +90,13 @@ Use timestamps, for example `(2026-06-16 09:00Z)`, when checking items off so a 
   dates to retry in July after monthly Exa credits reset are: `2026-02-18`,
   `2026-02-19`, `2026-03-11`, `2026-03-12`, `2026-03-16`, `2026-03-17`,
   `2026-03-20`, `2026-03-24`, and `2026-03-26`.
+- Observation (2026-06-18): Plan B Reddit population still hit Reddit's
+  unauthenticated RSS rate limit even with the fixed 9-request path and a 10-second
+  inter-request delay, but bounded retries were sufficient for this run.
+  Evidence: the population run printed repeated HTTP 429 retry warnings for several
+  ticker/subreddit feeds, then completed with `posts_written: 900`,
+  `payloads_written: 183`, `transaction_days: 61`, and
+  `request_delay_seconds: 10.0`.
 
 Add new observations here as they arise, with a short evidence snippet. Test output is ideal.
 
@@ -193,6 +200,25 @@ first analyst tool-output writer that Plan B shares with Plan 07:
 
 The remaining Plan B dataset-building work starts with `get_indicators`; evaluation
 runs are still pending.
+
+Milestone 6 — Shared `fetch_reddit_posts` tool-output builder (2026-06-18). Added
+the Reddit builder that Plan B needs for analyst sentiment replay:
+
+- `EvalDataset` now creates and manages a `reddit_posts` table for raw RSS post
+  rows, separate from capped prompt-ready `tool_outputs` rows.
+- `build_reddit_outputs()` fetches Reddit RSS once per `(ticker, subreddit)` using
+  OR-joined ticker aliases from the coverage scanner, writes all returned raw posts,
+  and renders a small replay payload for each ticker/trading day.
+- The Plan B default Reddit request delay is 10 seconds, with CLI overrides
+  `--reddit-delay` and `--reddit-limit-per-sub`; the replay payload limit defaults
+  to the existing small sentiment setting, while raw storage is uncapped by that
+  replay limit.
+- Focused validation passed:
+  `uv run pytest tests/test_eval_dataset.py tests/test_eval_build_dataset.py tests/test_eval_reddit_coverage.py`
+  reported 32 passed.
+- Live population wrote `data/eval_dataset_2026q1.duckdb` with 900 raw Reddit post
+  rows and 183 `fetch_reddit_posts` replay rows. A read-only verification query
+  confirmed 300 raw rows each for AAPL, AMZN, and GOOGL.
 
 When the Plan B dataset and full run are complete, update this section with:
 
