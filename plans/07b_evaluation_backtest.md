@@ -42,7 +42,7 @@ The concrete result values above are illustrative. The final implementation must
 - [x] (2026-06-18 07:22Z) Implemented and populated Plan B dataset building for `fetch_reddit_posts`: added a raw `reddit_posts` DuckDB table, collected Reddit RSS with OR-joined aliases and a 10-second inter-request delay, stored all fetched raw posts, and generated capped replay payloads for each ticker/trading day. Wrote 900 raw Reddit post rows to `data/eval_dataset_2026q1.duckdb` (AAPL 300, GOOGL 300, AMZN 300) and 183 persistent `fetch_reddit_posts` rows in `tool_outputs` (3 tickers times 61 transaction days). Focused validation passed with `uv run pytest tests/test_eval_dataset.py tests/test_eval_build_dataset.py tests/test_eval_reddit_coverage.py`; `ruff` was unavailable in the environment. Reddit returned multiple bounded HTTP 429 retries during population, but the run completed.
 - [ ] (pending) Implement Plan B dataset building for `fetch_stocktwits_messages`: record StockTwits sentiment text and distinguish empty results from source access failures where possible.
 - [x] Implement Plan B dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
-- [ ] (pending) Implement Plan B dataset building for `get_balance_sheet`: record best-effort balance-sheet text for each ticker and trading day.
+- [x] (2026-06-18 14:16Z) Implemented and populated Plan B dataset building for `get_balance_sheet` through the shared Plan 07 builder path: records the yfinance latest balance-sheet statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_balance_sheet` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2026-01-21`; the evaluation-backed `get_balance_sheet` tool matched the live tool exactly and AAPL had one distinct payload across all 61 replay dates.
 - [ ] (pending) Implement Plan B dataset building for `get_cashflow`: record best-effort cashflow text for each ticker and trading day.
 - [ ] (pending) Implement Plan B dataset building for `get_income_statement`: record best-effort income-statement text for each ticker and trading day.
 - [ ] (pending) Run a Plan B smoke evaluation, for example AAPL over three trading days, and record the observed command output.
@@ -219,6 +219,26 @@ the Reddit builder that Plan B needs for analyst sentiment replay:
 - Live population wrote `data/eval_dataset_2026q1.duckdb` with 900 raw Reddit post
   rows and 183 `fetch_reddit_posts` replay rows. A read-only verification query
   confirmed 300 raw rows each for AAPL, AMZN, and GOOGL.
+
+Milestone 7 — Shared `get_balance_sheet` tool-output builder (2026-06-18). Added the
+first financial-statement writer that Plan B shares with Plan 07:
+
+- `build_snapshot_tool_outputs()` centralizes the "fetch once per ticker, write every
+  transaction day" behavior used by current-snapshot fundamentals and statement tools.
+- `build_balance_sheet_outputs()` records `get_balance_sheet` payloads for each
+  selected ticker on each SPY-derived transaction day.
+- The payload is rendered through the existing `get_statement_text(ticker, "Balance sheet", "balance_sheet")`
+  helper, matching the live tool's text format.
+- Focused validation passed:
+  `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`
+  reported 53 passed.
+- Live population wrote 183 `get_balance_sheet` rows to
+  `data/eval_dataset_2026q1.duckdb`. A random replay check for AAPL on `2026-01-21`
+  matched the live tool exactly.
+
+The same balance-sheet payload is expected on later replay dates for a ticker because
+the live yfinance balance-sheet endpoint exposes the latest available statement table,
+not a daily historical statement feed.
 
 When the Plan B dataset and full run are complete, update this section with:
 
@@ -435,7 +455,7 @@ Representative Plan B evaluation report:
 
 The numbers above are illustrative placeholders. Replace them with actual output after the full run.
 
-Known limitations: 2026-Q1 is selected for Reddit availability and is not the same market regime as 2024-Q1. Reddit coverage remains limited by the public RSS endpoint and may be biased toward the newest results returned by Reddit. Fundamentals are best-effort snapshots unless a separate point-in-time fundamentals source has been implemented.
+Known limitations: 2026-Q1 is selected for Reddit availability and is not the same market regime as 2024-Q1. Reddit coverage remains limited by the public RSS endpoint and may be biased toward the newest results returned by Reddit. Fundamentals and yfinance financial statements are best-effort latest snapshots unless a separate point-in-time fundamentals source has been implemented.
 
 
 ## Interfaces and Dependencies

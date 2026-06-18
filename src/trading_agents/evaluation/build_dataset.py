@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Sequence
@@ -28,7 +29,7 @@ from trading_agents.evaluation.reddit_coverage import (
     RedditPost,
     fetch_rss_posts,
 )
-from trading_agents.tools.fundamentals import get_fundamentals_text
+from trading_agents.tools.fundamentals import get_fundamentals_text, get_statement_text
 from trading_agents.tools.market_data import (
     ALLOWED_INDICATORS,
     _normalise_price_history,
@@ -104,6 +105,7 @@ class DatasetBuildResult:
     global_news_result: ToolOutputBuildResult
     reddit_result: RedditBuildResult
     fundamentals_result: ToolOutputBuildResult
+    balance_sheet_result: ToolOutputBuildResult
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -511,33 +513,68 @@ def build_reddit_outputs(
     )
 
 
-def build_fundamentals_outputs(
+def build_snapshot_tool_outputs(
+    *,
+    tool_name: str,
+    render_payload: Callable[[str], str],
     options: BuildDatasetOptions,
     dataset: EvalDataset,
     transaction_days: Sequence[str],
 ) -> ToolOutputBuildResult:
-    """Record replayable ``get_fundamentals`` payloads for each ticker and day.
+    """Record replayable snapshot payloads for each ticker and day.
 
-    The live ``get_fundamentals`` tool is a current yfinance ``Ticker.info``
-    snapshot rather than a point-in-time historical feed. Fetch once per ticker
-    and record the same payload for every replay date so evaluation mode and
-    normal mode see the same tool text shape.
+    Several yfinance fundamentals endpoints expose latest available snapshots
+    rather than point-in-time daily history. Fetch once per ticker and record
+    the same payload for every replay date so evaluation mode and normal mode
+    see the same tool text shape.
     """
     symbols = _symbols_for_indicator_outputs(options)
     payloads_written = 0
 
     for symbol in symbols:
-        payload = get_fundamentals_text(symbol)
+        payload = render_payload(symbol)
         for as_of_date in transaction_days:
-            dataset.put_tool_output("get_fundamentals", symbol, as_of_date, payload)
+            dataset.put_tool_output(tool_name, symbol, as_of_date, payload)
             payloads_written += 1
 
     return ToolOutputBuildResult(
-        tool_name="get_fundamentals",
+        tool_name=tool_name,
         symbols=symbols,
         payloads_written=payloads_written,
         transaction_days=tuple(transaction_days),
         lookback_days=0,
+    )
+
+
+def build_fundamentals_outputs(
+    options: BuildDatasetOptions,
+    dataset: EvalDataset,
+    transaction_days: Sequence[str],
+) -> ToolOutputBuildResult:
+    """Record replayable ``get_fundamentals`` payloads for each ticker and day."""
+    return build_snapshot_tool_outputs(
+        tool_name="get_fundamentals",
+        render_payload=get_fundamentals_text,
+        options=options,
+        dataset=dataset,
+        transaction_days=transaction_days,
+    )
+
+
+def build_balance_sheet_outputs(
+    options: BuildDatasetOptions,
+    dataset: EvalDataset,
+    transaction_days: Sequence[str],
+) -> ToolOutputBuildResult:
+    """Record replayable ``get_balance_sheet`` payloads for each ticker and day."""
+    return build_snapshot_tool_outputs(
+        tool_name="get_balance_sheet",
+        render_payload=lambda ticker: get_statement_text(
+            ticker, "Balance sheet", "balance_sheet"
+        ),
+        options=options,
+        dataset=dataset,
+        transaction_days=transaction_days,
     )
 
 
@@ -633,6 +670,9 @@ def build_dataset(options: BuildDatasetOptions) -> DatasetBuildResult:
         fundamentals_result = build_fundamentals_outputs(
             options, dataset, price_result.transaction_days
         )
+        balance_sheet_result = build_balance_sheet_outputs(
+            options, dataset, price_result.transaction_days
+        )
         return DatasetBuildResult(
             price_result=price_result,
             stock_data_result=stock_data_result,
@@ -641,6 +681,7 @@ def build_dataset(options: BuildDatasetOptions) -> DatasetBuildResult:
             global_news_result=global_news_result,
             reddit_result=reddit_result,
             fundamentals_result=fundamentals_result,
+            balance_sheet_result=balance_sheet_result,
         )
 
 
@@ -708,6 +749,7 @@ def render_dataset_result(result: DatasetBuildResult) -> str:
             render_tool_output_result(result.global_news_result),
             render_reddit_result(result.reddit_result),
             render_tool_output_result(result.fundamentals_result),
+            render_tool_output_result(result.balance_sheet_result),
             "remaining tool-output builders: pending",
         ]
     )

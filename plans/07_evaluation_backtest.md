@@ -51,7 +51,7 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [ ] (pending) Implement dataset building for `fetch_reddit_posts`: record Reddit sentiment text with explicit handling for rate limits, blocked access, empty results, and parse failures. This is the only pending dataset-building step that is gated by source-availability/status verification.
 - [ ] (pending) Implement dataset building for `fetch_stocktwits_messages`: record StockTwits sentiment text and distinguish empty results from source access failures where possible.
 - [x] Implement dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
-- [ ] (pending) Implement dataset building for `get_balance_sheet`: record best-effort balance-sheet text for each ticker and trading day.
+- [x] (2026-06-18 14:16Z) Implemented and populated shared dataset building for `get_balance_sheet`: records the yfinance latest balance-sheet statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_balance_sheet` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-08`; the evaluation-backed `get_balance_sheet` tool matched the live tool exactly and AAPL had one distinct payload across all 61 replay dates.
 - [ ] (pending) Implement dataset building for `get_cashflow`: record best-effort cashflow text for each ticker and trading day.
 - [ ] (pending) Implement dataset building for `get_income_statement`: record best-effort income-statement text for each ticker and trading day.
 - [ ] (pending) If the Reddit availability/status gate fails for the configured 2024-Q1 evaluation, scan candidate replacement periods and record findings before recording Reddit payloads.
@@ -372,6 +372,26 @@ Remaining builder work: the Reddit availability/status gate must run before Redd
 payload writes, and the nine remaining analyst tool-output writers remain pending.
 Non-Reddit writers should be implemented, tested, collected into DuckDB, and
 summarized independently of the Reddit gate.
+
+Milestone 6 — Shared `get_balance_sheet` tool-output builder (2026-06-18). Added the
+first financial-statement writer in the shared builder path used by Plan 07 and Plan B:
+
+- `build_snapshot_tool_outputs()` centralizes the "fetch once per ticker, write every
+  transaction day" behavior used by current-snapshot fundamentals and statement tools.
+- `build_balance_sheet_outputs()` records `get_balance_sheet` payloads for each
+  selected ticker on each benchmark transaction day, keyed by
+  `(tool_name, ticker, as_of_date)` through `EvalDataset.put_tool_output()`.
+- The payload is rendered through the existing `get_statement_text(ticker, "Balance sheet", "balance_sheet")`
+  helper, matching the live tool's text format.
+- Focused validation passed:
+  `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`
+  reported 53 passed.
+- Live population wrote 183 `get_balance_sheet` rows to `data/eval_dataset.duckdb`.
+  A random replay check for AAPL on `2024-03-08` matched the live tool exactly.
+
+The same balance-sheet payload is expected on later replay dates for a ticker because
+the live yfinance balance-sheet endpoint exposes the latest available statement table,
+not a daily historical statement feed.
 
 
 ## Context and Orientation
@@ -783,11 +803,12 @@ Representative evaluation report (illustrative):
     GOOGL  first Overweight 2024-01-11 @ 142.30 | V_start=284.60 | CR = +9.1%
     AMZN   first Buy 2024-01-05 @ 145.24 | V_start=145.24 | CR = +12.7%
 
-Known limitations to keep in mind: fundamentals are best-effort current snapshots, not
-point-in-time; the trading-day count is derived from the actual price calendar and
-equals the README's 61 (2024-01-02 .. 2024-03-28, with 2024-03-29 a closed holiday);
-Reddit is currently the likely historical-source blocker; and the full run is
-language-model-expensive (3 × 61 = 183 flow runs), which is why `--limit-days` exists.
+Known limitations to keep in mind: fundamentals and yfinance financial statements are
+best-effort latest snapshots, not point-in-time daily history; the trading-day count is
+derived from the actual price calendar and equals the README's 61 (2024-01-02 ..
+2024-03-28, with 2024-03-29 a closed holiday); Reddit is currently the likely
+historical-source blocker; and the full run is language-model-expensive (3 × 61 = 183
+flow runs), which is why `--limit-days` exists.
 
 
 ## Interfaces and Dependencies
