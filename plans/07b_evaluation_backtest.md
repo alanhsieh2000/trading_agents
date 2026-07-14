@@ -47,6 +47,12 @@ The concrete result values above are illustrative. The final implementation must
   calling the StockTwits API. Wrote 183 persistent `fetch_stocktwits_messages` rows
   to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero
   no-data rows.
+- [x] (2026-07-14 12:35Z) Repaired the AAPL `get_news` payloads for 2026-01-27
+  and 2026-01-30 without calling Exa. Removed one complete contaminated
+  MarketScreener article block from each row because its generated summary embedded
+  market data dated 2026-06-12 and 2026-06-08, respectively. Both repaired payloads
+  retain 38 articles and contain no valid ISO date later than their trade date;
+  `tests/test_eval_dataset.py` passed with 8 tests.
 - [x] Implement Plan B dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
 - [x] (2026-06-18 14:16Z) Implemented and populated Plan B dataset building for `get_balance_sheet` through the shared Plan 07 builder path: records the yfinance latest balance-sheet statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_balance_sheet` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2026-01-21`; the evaluation-backed `get_balance_sheet` tool matched the live tool exactly and AAPL had one distinct payload across all 61 replay dates.
 - [x] (2026-06-18 14:24Z) Implemented and populated Plan B dataset building for `get_cashflow` through the shared Plan 07 builder path: records the yfinance latest cash flow statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_cashflow` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2026-01-09`; the evaluation-backed `get_cashflow` tool matched the live tool exactly and each ticker had one distinct payload across all 61 replay dates.
@@ -116,6 +122,13 @@ Use timestamps, for example `(2026-06-16 09:00Z)`, when checking items off so a 
   its HTTP JSON fetch replaced by the same selected raw messages from disk. The
   shared summary was `Bullish: 11 (37%) · Bearish: 3 (10%) · Unlabeled: 16 · Total:
   30 most-recent messages`.
+- Observation (2026-07-14): Exa-generated summaries can embed market data from
+  after the requested historical window even when the surrounding result was
+  selected for an earlier date.
+  Evidence: the AAPL 2026-01-27 and 2026-01-30 `get_news` payloads contained
+  MarketScreener summaries with market data dated 2026-06-12 and 2026-06-08. A
+  targeted offline repair removed the complete offending article blocks and left
+  all 183 `get_news` rows present.
 
 Add new observations here as they arise, with a short evidence snippet. Test output is ideal.
 
