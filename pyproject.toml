@@ -29,6 +29,7 @@ plot = "trading_agents.main:plot"
 run_with_trigger = "trading_agents.main:run_with_trigger"
 analyze = "trading_agents.main:cli"
 scan-reddit-coverage = "trading_agents.evaluation.reddit_coverage:main"
+scan-stocktwits-coverage = "trading_agents.evaluation.stocktwits_coverage:main"
 build-eval-dataset = "trading_agents.evaluation.build_dataset:main"
 build-plan-b-eval-dataset = "trading_agents.evaluation.build_dataset:plan_b_main"
 
