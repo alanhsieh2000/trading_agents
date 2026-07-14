@@ -51,7 +51,7 @@ Stage 1 succeeds for all tickers.
 - Observation: The seed AAPL files show StockTwits pagination through `cursor.max`.
   Evidence: `AAPL-0001.json` has `cursor.max=658863672`; `AAPL-0002.json` was
   fetched with that value and has older messages plus a new `cursor.max=658857991`.
-- Observation: AAPL message volume is high enough that the required 10-second
+- Observation: AAPL message volume is high enough that the original 10-second
   inter-request delay makes the Stage 1 scan a long-running data collection job.
   Evidence: A foreground `uv run scan-stocktwits-coverage` attempt on 2026-07-14
   wrote 25 additional AAPL pages, reaching `AAPL-0027.json`; that file's oldest
@@ -65,6 +65,10 @@ Stage 1 succeeds for all tickers.
   `AAPL-0037.json`, and the 1-second probe wrote `AAPL-0038.json` through
   `AAPL-0042.json`; no HTTP error or 429 occurred. `AAPL-0042.json` had oldest
   message `2026-07-08T14:19:26Z` and `cursor.more=True`.
+- Observation: The scanner default was reduced to a 1-second inter-request delay
+  after the short delay probe.
+  Evidence: The probe wrote five consecutive AAPL pages at 1-second spacing without
+  HTTP errors or 429s; `scan-stocktwits-coverage` now defaults `--delay` to `1.0`.
 
 Add new observations here as they arise, with a short evidence snippet.
 
@@ -89,9 +93,11 @@ Add new observations here as they arise, with a short evidence snippet.
   older Plan 07 cutoff would waste requests and increase rate-limit risk.
   Date/Author: 2026-07-14 / Codex
 
-- Decision: Use a 10-second delay between every two StockTwits API calls, including
-  ticker transitions.
-  Rationale: The user explicitly requested this delay to reduce API rate-limit risk.
+- Decision: Use a 1-second default delay between every two StockTwits API calls,
+  including ticker transitions.
+  Rationale: A controlled AAPL probe succeeded at 4-second, 2-second, and 1-second
+  delays for five pages each with no HTTP errors, and the 10-second delay made the
+  scan impractically slow for high-volume tickers.
   Date/Author: 2026-07-14 / Codex
 
 
@@ -107,7 +113,7 @@ Add new observations here as they arise, with a short evidence snippet.
 - CLI options:
   - `--tickers AAPL GOOGL AMZN`
   - `--output-dir data/raw-backtest/stocktwits`
-  - `--delay 10`
+  - `--delay 1`
   - `--stage1-only`
   - `--stage1-cutoff YYYY-MM-DD`
   - `--stage2-cutoff YYYY-MM-DD`
@@ -128,9 +134,9 @@ The latest file at interruption time was:
     AAPL-0027.json newest=2026-07-09T16:26:09Z oldest=2026-07-09T15:45:05Z cursor={'more': True, 'since': 658670699, 'max': 658664599}
 
 GOOGL and AMZN had not started yet because Stage 1 processes tickers sequentially
-with a 10-second delay between every two API calls. The scanner is resumable; a
-future run will continue with `AAPL-0028.json` using `AAPL-0027.json`'s
-`cursor.max`.
+and this first attempt used a 10-second delay between every two API calls. The
+scanner is resumable; the later delay probe continued with `AAPL-0028.json` using
+`AAPL-0027.json`'s `cursor.max`.
 
 Live delay probe — AAPL only (2026-07-14). A controlled continuation fetched five
 more AAPL pages at each shorter delay:

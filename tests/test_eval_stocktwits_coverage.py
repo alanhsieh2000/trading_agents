@@ -9,6 +9,7 @@ from trading_agents.evaluation.stocktwits_coverage import (
     StocktwitsPage,
     _parse_cutoff,
     fetch_stocktwits_page,
+    main,
     render_stage_result,
     scan_stage,
     scan_ticker_until_cutoff,
@@ -313,3 +314,30 @@ def test_render_stage_result_includes_status(tmp_path):
     assert "Stage 1 StockTwits coverage scan" in output
     assert "succeeded: True" in output
     assert "AAPL files_written=1" in output
+
+
+def test_main_defaults_to_one_second_delay(monkeypatch, tmp_path, capsys):
+    captured = []
+
+    def fake_scan_stage(**kwargs):
+        captured.append(kwargs)
+        return type(
+            "Result",
+            (),
+            {
+                "name": kwargs["name"],
+                "cutoff": kwargs["cutoff"],
+                "tickers": (),
+                "succeeded": False,
+            },
+        )()
+
+    monkeypatch.setattr(
+        "trading_agents.evaluation.stocktwits_coverage.scan_stage", fake_scan_stage
+    )
+
+    exit_code = main(["--stage1-only", "--tickers", "AAPL", "--output-dir", str(tmp_path)])
+
+    assert exit_code == 1
+    assert captured[0]["delay_seconds"] == 1.0
+    assert capsys.readouterr().out.startswith("Stage 1 StockTwits coverage scan")

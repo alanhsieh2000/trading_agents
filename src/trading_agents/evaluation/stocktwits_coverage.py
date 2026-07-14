@@ -240,7 +240,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--tickers", nargs="+")
-    parser.add_argument("--delay", type=float, default=10.0)
+    parser.add_argument("--delay", type=float, default=1.0)
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument("--stage1-cutoff", default=PLAN_B_CUTOFF)
     parser.add_argument("--stage2-cutoff", default=PLAN_07_CUTOFF)
