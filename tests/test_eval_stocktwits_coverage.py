@@ -264,6 +264,39 @@ def test_scan_stage_honors_prior_request_from_previous_stage(tmp_path):
     assert result.succeeded is True
 
 
+def test_scan_stage_caps_total_files_across_tickers(tmp_path):
+    calls = []
+
+    def fake_fetch(ticker, *, max_id, timeout):
+        calls.append((ticker, max_id))
+        sequence = len(calls)
+        return _page(
+            _payload(
+                ticker,
+                since=100 - sequence,
+                max_id=90 - sequence,
+                more=True,
+                created_at="2026-01-01T00:00:00Z",
+            )
+        )
+
+    result = scan_stage(
+        name="Stage 1",
+        tickers=("AAPL", "GOOGL"),
+        output_dir=tmp_path,
+        cutoff=_parse_cutoff("2025-12-18"),
+        delay_seconds=0,
+        timeout=2,
+        fetch_page=fake_fetch,
+        sleep=lambda _seconds: None,
+        max_files=3,
+    )
+
+    assert calls == [("AAPL", None), ("AAPL", 89), ("AAPL", 88)]
+    assert len(result.tickers) == 1
+    assert len(result.tickers[0].files_written) == 3
+
+
 def test_scan_stage_does_not_fetch_when_existing_files_reach_cutoff(tmp_path):
     existing = _payload(
         "AAPL",
@@ -316,7 +349,7 @@ def test_render_stage_result_includes_status(tmp_path):
     assert "AAPL files_written=1" in output
 
 
-def test_main_defaults_to_one_second_delay(monkeypatch, tmp_path, capsys):
+def test_main_defaults_to_one_second_delay_and_100_files(monkeypatch, tmp_path, capsys):
     captured = []
 
     def fake_scan_stage(**kwargs):
@@ -340,4 +373,43 @@ def test_main_defaults_to_one_second_delay(monkeypatch, tmp_path, capsys):
 
     assert exit_code == 1
     assert captured[0]["delay_seconds"] == 1.0
-    assert capsys.readouterr().out.startswith("Stage 1 StockTwits coverage scan")
+    assert captured[0]["max_files"] == 100
+    output = capsys.readouterr().out
+    assert output.startswith("It may take 132 seconds.")
+    assert "Stage 1 StockTwits coverage scan" in output
+
+
+def test_main_passes_max_files(monkeypatch, tmp_path):
+    captured = []
+
+    def fake_scan_stage(**kwargs):
+        captured.append(kwargs)
+        return type(
+            "Result",
+            (),
+            {
+                "name": kwargs["name"],
+                "cutoff": kwargs["cutoff"],
+                "tickers": (),
+                "succeeded": False,
+            },
+        )()
+
+    monkeypatch.setattr(
+        "trading_agents.evaluation.stocktwits_coverage.scan_stage", fake_scan_stage
+    )
+
+    exit_code = main(
+        [
+            "--stage1-only",
+            "--tickers",
+            "AAPL",
+            "--output-dir",
+            str(tmp_path),
+            "--max-files",
+            "25",
+        ]
+    )
+
+    assert exit_code == 1
+    assert captured[0]["max_files"] == 25

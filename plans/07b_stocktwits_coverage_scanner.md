@@ -37,6 +37,8 @@ Stage 1 succeeds for all tickers.
 - [x] Added the `scan-stocktwits-coverage` console script.
 - [x] Added mocked unit tests for first-page requests, `max` pagination, resume
   behavior, cutoff stopping, `cursor.more` stopping, and inter-request delays.
+- [x] Added `--max-files` to cap the number of new JSON files downloaded by one
+  scanner invocation.
 - [ ] Run the live scanner for AAPL, GOOGL, and AMZN through Stage 1.
   A foreground attempt on 2026-07-14 was manually interrupted after writing
   `AAPL-0003.json` through `AAPL-0027.json`; AAPL had only reached
@@ -69,6 +71,19 @@ Stage 1 succeeds for all tickers.
   after the short delay probe.
   Evidence: The probe wrote five consecutive AAPL pages at 1-second spacing without
   HTTP errors or 429s; `scan-stocktwits-coverage` now defaults `--delay` to `1.0`.
+- Observation: Capped AAPL timing runs at the 1-second default delay completed
+  without HTTP errors while preserving all fetched pages.
+  Evidence: On 2026-07-14, `--max-files 10` downloaded 10 files in 15.990 seconds,
+  `--max-files 20` downloaded 20 files in 29.044 seconds, `--max-files 50`
+  downloaded 50 files in 69.320 seconds, and `--max-files 100` downloaded 100 files
+  in 131.488 seconds. The run advanced AAPL from `AAPL-0042.json` through
+  `AAPL-0222.json`; `AAPL-0222.json` had oldest message `2026-06-22T13:31:04Z`
+  and `cursor.more=True`.
+- Observation: The scanner now defaults to 100 new JSON files per invocation and
+  prints an estimated duration before fetching.
+  Evidence: The default `--max-files` is 100. With the default 1-second delay and
+  the observed AAPL timing, the command prints `It may take 132 seconds.` before
+  starting Stage 1.
 
 Add new observations here as they arise, with a short evidence snippet.
 
@@ -108,12 +123,17 @@ Add new observations here as they arise, with a short evidence snippet.
   the next sequence number, and uses that file's `cursor.max`.
 - The scanner stops a ticker when the oldest observed `messages[*].created_at`
   reaches the stage cutoff or when `cursor.more` is false.
+- `--max-files N` stops the current invocation after writing at most `N` new JSON
+  files. The cap applies across tickers and stages, and defaults to 100.
+- Before scanning, the CLI prints `It may take {need_seconds} seconds.` using a
+  rounded-up estimate from `max_files` and the configured delay.
 - Existing files are never overwritten; new responses are written atomically.
 - The default output directory is `data/raw-backtest/stocktwits`.
 - CLI options:
   - `--tickers AAPL GOOGL AMZN`
   - `--output-dir data/raw-backtest/stocktwits`
   - `--delay 1`
+  - `--max-files 100`
   - `--stage1-only`
   - `--stage1-cutoff YYYY-MM-DD`
   - `--stage2-cutoff YYYY-MM-DD`
@@ -152,3 +172,18 @@ The latest file after the probe was:
 This small probe suggests StockTwits tolerates at least short bursts at 1-second
 spacing from this environment, but it does not prove a full multi-hour scan will
 avoid rate limits.
+
+Live capped timing run — AAPL only (2026-07-14). Ran four resumable capped batches
+at the default 1-second delay:
+
+    max_files=10  before=42  after=52   downloaded=10   elapsed_seconds=15.990
+    max_files=20  before=52  after=72   downloaded=20   elapsed_seconds=29.044
+    max_files=50  before=72  after=122  downloaded=50   elapsed_seconds=69.320
+    max_files=100 before=122 after=222  downloaded=100  elapsed_seconds=131.488
+
+No HTTP errors or 429s occurred. The latest file after the capped timing run was:
+
+    AAPL-0222.json newest=2026-06-22T14:37:52Z oldest=2026-06-22T13:31:04Z cursor={'more': True, 'since': 657053125, 'max': 657038191}
+
+The raw StockTwits folder was approximately 24 MB after this run. AAPL still had
+not reached the Stage 1 cutoff.

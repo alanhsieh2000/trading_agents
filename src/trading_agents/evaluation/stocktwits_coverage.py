@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ from trading_agents.tools.sentiment import STOCKTWITS_HEADERS
 
 
 DEFAULT_OUTPUT_DIR = Path("data/raw-backtest/stocktwits")
+DEFAULT_MAX_FILES = 100
+SECONDS_PER_FILE_ESTIMATE = 1.32
 PLAN_B_CUTOFF = "2025-12-18"
 PLAN_07_CUTOFF = "2023-12-18"
 
@@ -85,11 +88,15 @@ def scan_stage(
     fetch_page: Callable[..., StocktwitsPage] = fetch_stocktwits_page,
     sleep: Callable[[float], None] = time.sleep,
     made_prior_request: bool = False,
+    max_files: int | None = None,
 ) -> StageScanResult:
     """Scan every ticker until the cutoff or StockTwits pagination ends."""
     output_dir.mkdir(parents=True, exist_ok=True)
     results: list[TickerScanResult] = []
+    files_remaining = max_files
     for ticker in tickers:
+        if files_remaining is not None and files_remaining <= 0:
+            break
         result, made_prior_request = scan_ticker_until_cutoff(
             ticker=ticker,
             output_dir=output_dir,
@@ -99,8 +106,11 @@ def scan_stage(
             fetch_page=fetch_page,
             sleep=sleep,
             made_prior_request=made_prior_request,
+            max_files=files_remaining,
         )
         results.append(result)
+        if files_remaining is not None:
+            files_remaining -= len(result.files_written)
     return StageScanResult(name=name, cutoff=cutoff, tickers=tuple(results))
 
 
@@ -114,6 +124,7 @@ def scan_ticker_until_cutoff(
     fetch_page: Callable[..., StocktwitsPage] = fetch_stocktwits_page,
     sleep: Callable[[float], None] = time.sleep,
     made_prior_request: bool = False,
+    max_files: int | None = None,
 ) -> tuple[TickerScanResult, bool]:
     """Continue one ticker's JSON sequence until coverage reaches ``cutoff``."""
     symbol = ticker.upper().strip()
@@ -126,7 +137,11 @@ def scan_ticker_until_cutoff(
     oldest = existing_summary.oldest_created_at
     written: list[Path] = []
 
-    while cursor_more and not _reached_cutoff(oldest, cutoff):
+    while (
+        cursor_more
+        and not _reached_cutoff(oldest, cutoff)
+        and (max_files is None or len(written) < max_files)
+    ):
         if made_prior_request and delay_seconds > 0:
             sleep(delay_seconds)
         page = fetch_page(symbol, max_id=max_id, timeout=timeout)
@@ -242,6 +257,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--tickers", nargs="+")
     parser.add_argument("--delay", type=float, default=1.0)
     parser.add_argument("--timeout", type=float, default=20.0)
+    parser.add_argument(
+        "--max-files",
+        type=int,
+        default=DEFAULT_MAX_FILES,
+        help="Maximum number of new JSON files to download in this invocation.",
+    )
     parser.add_argument("--stage1-cutoff", default=PLAN_B_CUTOFF)
     parser.add_argument("--stage2-cutoff", default=PLAN_07_CUTOFF)
     parser.add_argument("--stage1-only", action="store_true")
@@ -252,6 +273,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         ticker.upper() for ticker in (args.tickers or settings.evaluation.tickers)
     )
     output_dir = Path(args.output_dir)
+    max_files = max(args.max_files, 0)
+    need_seconds = math.ceil(max_files * max(args.delay, SECONDS_PER_FILE_ESTIMATE))
+    print("It may take %d seconds." % need_seconds)
     stage1 = scan_stage(
         name="Stage 1",
         tickers=tickers,
@@ -259,12 +283,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         cutoff=_parse_cutoff(args.stage1_cutoff),
         delay_seconds=max(args.delay, 0.0),
         timeout=args.timeout,
+        max_files=max_files,
     )
     print(render_stage_result(stage1))
     if args.stage1_only or not stage1.succeeded:
         return 0 if stage1.succeeded else 1
 
     stage1_made_request = any(result.files_written for result in stage1.tickers)
+    stage1_files = sum(len(result.files_written) for result in stage1.tickers)
+    max_files = max(max_files - stage1_files, 0)
     stage2 = scan_stage(
         name="Stage 2",
         tickers=tickers,
@@ -273,6 +300,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         delay_seconds=max(args.delay, 0.0),
         timeout=args.timeout,
         made_prior_request=stage1_made_request,
+        max_files=max_files,
     )
     print()
     print(render_stage_result(stage2))
