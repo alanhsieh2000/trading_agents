@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 
 import pandas as pd
 import pytest
@@ -11,6 +12,7 @@ from trading_agents.config import get_settings
 from trading_agents.evaluation.dataset import EvalDataset
 from trading_agents.evaluation import build_dataset
 from trading_agents.evaluation.reddit_coverage import RedditPost
+from trading_agents.evaluation.build_dataset import StocktwitsMessage
 
 
 @pytest.fixture(autouse=True)
@@ -497,6 +499,142 @@ def test_build_reddit_outputs_stores_all_posts_but_limits_replay_payload(
     assert "googl" in googl_payload
 
 
+def _stocktwits_payload(ticker: str, messages: list[dict]) -> dict:
+    return {
+        "symbol": {"symbol": ticker},
+        "cursor": {"more": True, "since": 3, "max": 1},
+        "messages": messages,
+    }
+
+
+def _stocktwits_message(
+    message_id: int,
+    created_at: str,
+    body: str,
+    username: str = "user",
+    sentiment: str | None = None,
+) -> dict:
+    entities = {"sentiment": {"basic": sentiment}} if sentiment else {}
+    return {
+        "id": message_id,
+        "created_at": created_at,
+        "body": body,
+        "user": {"username": username},
+        "entities": entities,
+    }
+
+
+def test_load_stocktwits_messages_dedupes_and_sorts_descending(tmp_path):
+    raw_dir = tmp_path / "stocktwits"
+    raw_dir.mkdir()
+    first = _stocktwits_payload(
+        "AAPL",
+        [
+            _stocktwits_message(1, "2026-01-02T12:00:00Z", "older"),
+            _stocktwits_message(2, "2026-01-03T12:00:00Z", "newer", "bull", "Bullish"),
+        ],
+    )
+    second = _stocktwits_payload(
+        "AAPL",
+        [
+            _stocktwits_message(2, "2026-01-03T12:00:00Z", "duplicate"),
+            _stocktwits_message(3, "2026-01-01T12:00:00Z", "oldest", "bear", "Bearish"),
+        ],
+    )
+    (raw_dir / "AAPL-0001.json").write_text(json.dumps(first))
+    (raw_dir / "AAPL-0002.json").write_text(json.dumps(second))
+
+    messages = build_dataset.load_stocktwits_messages("aapl", raw_dir=raw_dir)
+
+    assert [message.message_id for message in messages] == [2, 1, 3]
+    assert messages[0].body == "newer"
+    assert messages[0].sentiment == "Bullish"
+
+
+def test_render_stocktwits_payload_matches_live_helper_shape():
+    messages = [
+        StocktwitsMessage(
+            ticker="AAPL",
+            message_id=3,
+            created_at=datetime.fromisoformat("2026-01-05T12:00:00+00:00"),
+            body="bullish body",
+            username="bull",
+            sentiment="Bullish",
+        ),
+        StocktwitsMessage(
+            ticker="AAPL",
+            message_id=2,
+            created_at=datetime.fromisoformat("2026-01-04T12:00:00+00:00"),
+            body="bearish body",
+            username="bear",
+            sentiment="Bearish",
+        ),
+        StocktwitsMessage(
+            ticker="AAPL",
+            message_id=1,
+            created_at=datetime.fromisoformat("2025-12-20T12:00:00+00:00"),
+            body="too old",
+            username="old",
+            sentiment=None,
+        ),
+    ]
+
+    payload = build_dataset.render_stocktwits_payload(
+        "aapl", "2026-01-05", messages, lookback_days=7, limit=30
+    )
+
+    assert payload == (
+        "Bullish: 1 (50%) · Bearish: 1 (50%) · Unlabeled: 0 · "
+        "Total: 2 most-recent messages\n\n"
+        "[2026-01-05T12:00:00Z · @bull · Bullish] bullish body\n"
+        "[2026-01-04T12:00:00Z · @bear · Bearish] bearish body"
+    )
+
+
+def test_build_stocktwits_outputs_writes_lookback_payloads_from_raw_json(tmp_path):
+    raw_dir = tmp_path / "stocktwits"
+    raw_dir.mkdir()
+    payload = _stocktwits_payload(
+        "AAPL",
+        [
+            _stocktwits_message(3, "2026-01-03T12:00:00Z", "inside", "near", "Bullish"),
+            _stocktwits_message(2, "2025-12-20T12:00:00Z", "outside", "far"),
+        ],
+    )
+    (raw_dir / "AAPL-0001.json").write_text(json.dumps(payload))
+    options = build_dataset.BuildDatasetOptions(
+        dataset_path=str(tmp_path / "eval.duckdb"),
+        tickers=("AAPL",),
+        benchmark="SPY",
+        start_date="2026-01-02",
+        end_date="2026-01-03",
+        buffer_start_date="2025-12-01",
+        price_tail_days=2,
+        lookback_days=7,
+        weight_over=0.5,
+        weight_under=0.5,
+        limit_days=None,
+        verify_only=False,
+    )
+
+    with EvalDataset(options.dataset_path) as dataset:
+        result = build_dataset.build_stocktwits_outputs(
+            options, dataset, ["2026-01-02", "2026-01-03"], raw_dir=raw_dir
+        )
+        first_payload = dataset.tool_output(
+            "fetch_stocktwits_messages", "AAPL", "2026-01-02"
+        )
+        second_payload = dataset.tool_output(
+            "fetch_stocktwits_messages", "AAPL", "2026-01-03"
+        )
+
+    assert result.tool_name == "fetch_stocktwits_messages"
+    assert result.payloads_written == 2
+    assert first_payload == "No data available for StockTwits messages for AAPL."
+    assert "inside" in second_payload
+    assert "outside" not in second_payload
+
+
 def test_build_fundamentals_outputs_writes_tickers_only_and_reuses_snapshot(
     monkeypatch, tmp_path
 ):
@@ -717,6 +855,7 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
         ),
     )
     monkeypatch.setattr(build_dataset, "fetch_reddit_posts_for_dataset", lambda **_: [])
+    monkeypatch.setattr(build_dataset, "load_stocktwits_messages", lambda *_args, **_: [])
     monkeypatch.setattr(
         build_dataset,
         "get_fundamentals_text",
@@ -743,13 +882,13 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
     assert "get_news outputs built" in output
     assert "get_global_news outputs built" in output
     assert "fetch_reddit_posts outputs built" in output
+    assert "fetch_stocktwits_messages outputs built" in output
     assert "get_fundamentals outputs built" in output
     assert "get_balance_sheet outputs built" in output
     assert "get_cashflow outputs built" in output
     assert "get_income_statement outputs built" in output
     assert "payloads_written: 4" in output
     assert "payloads_written: 2" in output
-    assert "remaining tool-output builders: pending" in output
     with EvalDataset(dataset_path, read_only=True) as dataset:
         assert dataset.close_series("AAPL")
         assert dataset.close_series("SPY")
@@ -759,6 +898,7 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
         assert dataset.tool_output("get_news", "AAPL", "2026-01-02")
         assert dataset.tool_output("get_global_news", "AAPL", "2026-01-02")
         assert dataset.tool_output("fetch_reddit_posts", "AAPL", "2026-01-02")
+        assert dataset.tool_output("fetch_stocktwits_messages", "AAPL", "2026-01-02")
         assert dataset.tool_output("get_fundamentals", "AAPL", "2026-01-02")
         assert dataset.tool_output("get_balance_sheet", "AAPL", "2026-01-02")
         assert dataset.tool_output("get_cashflow", "AAPL", "2026-01-02")

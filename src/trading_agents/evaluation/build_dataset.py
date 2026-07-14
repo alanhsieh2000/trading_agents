@@ -9,10 +9,12 @@ backtest mechanics remain comparable.
 from __future__ import annotations
 
 import argparse
+import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Sequence
 
 import pandas as pd
@@ -42,6 +44,7 @@ PLAN_B_START_DATE = "2026-01-01"
 PLAN_B_END_DATE = "2026-03-31"
 PLAN_B_BUFFER_START_DATE = "2025-12-01"
 PLAN_B_DATASET_PATH = "data/eval_dataset_2026q1.duckdb"
+STOCKTWITS_RAW_DIR = Path("data/raw-backtest/stocktwits")
 
 
 @dataclass(frozen=True)
@@ -97,6 +100,16 @@ class RedditBuildResult:
 
 
 @dataclass(frozen=True)
+class StocktwitsMessage:
+    ticker: str
+    message_id: int
+    created_at: datetime
+    body: str
+    username: str
+    sentiment: str | None
+
+
+@dataclass(frozen=True)
 class DatasetBuildResult:
     price_result: PriceBuildResult
     stock_data_result: ToolOutputBuildResult
@@ -104,6 +117,7 @@ class DatasetBuildResult:
     news_result: ToolOutputBuildResult
     global_news_result: ToolOutputBuildResult
     reddit_result: RedditBuildResult
+    stocktwits_result: ToolOutputBuildResult
     fundamentals_result: ToolOutputBuildResult
     balance_sheet_result: ToolOutputBuildResult
     cashflow_result: ToolOutputBuildResult
@@ -515,6 +529,114 @@ def build_reddit_outputs(
     )
 
 
+def load_stocktwits_messages(
+    ticker: str, raw_dir: Path = STOCKTWITS_RAW_DIR
+) -> list[StocktwitsMessage]:
+    """Load and dedupe raw StockTwits messages collected by the coverage scanner."""
+    symbol = ticker.upper().strip()
+    messages_by_id: dict[int, StocktwitsMessage] = {}
+    for path in sorted(raw_dir.glob(f"{symbol}-*.json")):
+        payload = json.loads(path.read_text())
+        raw_messages = payload.get("messages") if isinstance(payload, dict) else []
+        for raw_message in raw_messages or []:
+            if not isinstance(raw_message, dict):
+                continue
+            message = _stocktwits_message_from_raw(symbol, raw_message)
+            if message is None:
+                continue
+            messages_by_id.setdefault(message.message_id, message)
+    return sorted(
+        messages_by_id.values(), key=lambda message: message.created_at, reverse=True
+    )
+
+
+def render_stocktwits_payload(
+    ticker: str,
+    as_of_date: str,
+    messages: Sequence[StocktwitsMessage],
+    *,
+    lookback_days: int,
+    limit: int,
+) -> str:
+    """Render historical StockTwits messages in the live helper's text format."""
+    symbol = ticker.upper().strip()
+    end_date = _parse_date(as_of_date)
+    start_date = end_date - timedelta(days=lookback_days)
+    selected = [
+        message
+        for message in messages
+        if start_date <= message.created_at.date() <= end_date
+    ][: max(limit, 0)]
+    if not selected:
+        return f"No data available for StockTwits messages for {symbol}."
+
+    lines = []
+    bullish = bearish = unlabeled = 0
+    for message in selected:
+        if message.sentiment == "Bullish":
+            bullish += 1
+            tag = "Bullish"
+        elif message.sentiment == "Bearish":
+            bearish += 1
+            tag = "Bearish"
+        else:
+            unlabeled += 1
+            tag = "no-label"
+
+        body = _trim_stocktwits_text(" ".join(message.body.split()), 280)
+        lines.append(
+            f"[{_format_stocktwits_created_at(message.created_at)} · "
+            f"@{message.username} · {tag}] {body}"
+        )
+
+    total = bullish + bearish + unlabeled
+    bull_pct = round(100 * bullish / total) if total else 0
+    bear_pct = round(100 * bearish / total) if total else 0
+    summary = (
+        f"Bullish: {bullish} ({bull_pct}%) · "
+        f"Bearish: {bearish} ({bear_pct}%) · "
+        f"Unlabeled: {unlabeled} · "
+        f"Total: {total} most-recent messages"
+    )
+    return summary + "\n\n" + "\n".join(lines)
+
+
+def build_stocktwits_outputs(
+    options: BuildDatasetOptions,
+    dataset: EvalDataset,
+    transaction_days: Sequence[str],
+    *,
+    raw_dir: Path = STOCKTWITS_RAW_DIR,
+) -> ToolOutputBuildResult:
+    """Record replayable ``fetch_stocktwits_messages`` payloads from raw JSON files."""
+    settings = get_settings()
+    symbols = _symbols_for_indicator_outputs(options)
+    payloads_written = 0
+
+    for symbol in symbols:
+        messages = load_stocktwits_messages(symbol, raw_dir=raw_dir)
+        for as_of_date in transaction_days:
+            payload = render_stocktwits_payload(
+                symbol,
+                as_of_date,
+                messages,
+                lookback_days=options.lookback_days,
+                limit=settings.sentiment.stocktwits_limit,
+            )
+            dataset.put_tool_output(
+                "fetch_stocktwits_messages", symbol, as_of_date, payload
+            )
+            payloads_written += 1
+
+    return ToolOutputBuildResult(
+        tool_name="fetch_stocktwits_messages",
+        symbols=symbols,
+        payloads_written=payloads_written,
+        transaction_days=tuple(transaction_days),
+        lookback_days=options.lookback_days,
+    )
+
+
 def build_snapshot_tool_outputs(
     *,
     tool_name: str,
@@ -686,6 +808,63 @@ def _trim_text(value: str, max_length: int) -> str:
     return value[:max_length] + "..."
 
 
+def _stocktwits_message_from_raw(
+    ticker: str, raw_message: dict[str, object]
+) -> StocktwitsMessage | None:
+    message_id = _as_optional_int(raw_message.get("id"))
+    created_at = _parse_stocktwits_datetime(raw_message.get("created_at"))
+    if message_id is None or created_at is None:
+        return None
+    entities = raw_message.get("entities") or {}
+    sentiment_obj = entities.get("sentiment") if isinstance(entities, dict) else {}
+    sentiment_obj = sentiment_obj or {}
+    sentiment = (
+        sentiment_obj.get("basic") if isinstance(sentiment_obj, dict) else None
+    )
+    user = raw_message.get("user") or {}
+    username = user.get("username", "?") if isinstance(user, dict) else "?"
+    return StocktwitsMessage(
+        ticker=ticker,
+        message_id=message_id,
+        created_at=created_at,
+        body=str(raw_message.get("body", "")),
+        username=str(username or "?"),
+        sentiment=str(sentiment) if sentiment else None,
+    )
+
+
+def _parse_stocktwits_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _format_stocktwits_created_at(value: datetime) -> str:
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _trim_stocktwits_text(value: str, max_length: int) -> str:
+    if len(value) <= max_length:
+        return value
+    if max_length <= 1:
+        return value[:max_length]
+    return value[:max_length] + "…"
+
+
+def _as_optional_int(value: object) -> int | None:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
 def build_dataset(options: BuildDatasetOptions) -> DatasetBuildResult:
     """Build the currently implemented shared dataset pieces."""
     with EvalDataset(options.dataset_path) as dataset:
@@ -701,6 +880,9 @@ def build_dataset(options: BuildDatasetOptions) -> DatasetBuildResult:
             options, dataset, price_result.transaction_days
         )
         reddit_result = build_reddit_outputs(
+            options, dataset, price_result.transaction_days
+        )
+        stocktwits_result = build_stocktwits_outputs(
             options, dataset, price_result.transaction_days
         )
         fundamentals_result = build_fundamentals_outputs(
@@ -722,6 +904,7 @@ def build_dataset(options: BuildDatasetOptions) -> DatasetBuildResult:
             news_result=news_result,
             global_news_result=global_news_result,
             reddit_result=reddit_result,
+            stocktwits_result=stocktwits_result,
             fundamentals_result=fundamentals_result,
             balance_sheet_result=balance_sheet_result,
             cashflow_result=cashflow_result,
@@ -792,11 +975,11 @@ def render_dataset_result(result: DatasetBuildResult) -> str:
             render_tool_output_result(result.news_result),
             render_tool_output_result(result.global_news_result),
             render_reddit_result(result.reddit_result),
+            render_tool_output_result(result.stocktwits_result),
             render_tool_output_result(result.fundamentals_result),
             render_tool_output_result(result.balance_sheet_result),
             render_tool_output_result(result.cashflow_result),
             render_tool_output_result(result.income_statement_result),
-            "remaining tool-output builders: pending",
         ]
     )
 

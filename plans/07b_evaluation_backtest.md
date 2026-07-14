@@ -40,7 +40,13 @@ The concrete result values above are illustrative. The final implementation must
 - [x] (2026-06-17 13:03Z) Implemented and populated Plan B dataset building for `get_news` through the shared Plan 07 builder path: records ticker-news text through the Exa historical source layer with the same markdown/no-news/error contract as the live Yahoo-backed tool. The builder uses a doubled news limit (`settings.news.ticker_limit * 2`, currently 40) for buffer coverage and writes ticker rows only. Wrote 183 persistent `get_news` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`.
 - [x] (2026-06-17) Implemented and populated Plan B dataset building for `get_global_news` through the shared Plan 07 builder path: records one Exa historical global-market-news payload per trading day, stores it under each evaluated ticker key for existing dataset-backed tool replay, and uses a doubled global-news limit (`settings.news.global_limit * 2`, currently 20). Wrote 183 persistent `get_global_news` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Source warning: Exa returned HTTP 402 credit-limit errors after 52 successful days, so 27 rows across 9 dates currently contain explicit `Error fetching global news ... exceeded your credits limit` payloads; zero rows use the no-news fallback. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2026-01-16`; the evaluation-backed `get_global_news` tool matched the DuckDB payload exactly and returned the shared global payload for all ticker keys on that date.
 - [x] (2026-06-18 07:22Z) Implemented and populated Plan B dataset building for `fetch_reddit_posts`: added a raw `reddit_posts` DuckDB table, collected Reddit RSS with OR-joined aliases and a 10-second inter-request delay, stored all fetched raw posts, and generated capped replay payloads for each ticker/trading day. Wrote 900 raw Reddit post rows to `data/eval_dataset_2026q1.duckdb` (AAPL 300, GOOGL 300, AMZN 300) and 183 persistent `fetch_reddit_posts` rows in `tool_outputs` (3 tickers times 61 transaction days). Focused validation passed with `uv run pytest tests/test_eval_dataset.py tests/test_eval_build_dataset.py tests/test_eval_reddit_coverage.py`; `ruff` was unavailable in the environment. Reddit returned multiple bounded HTTP 429 retries during population, but the run completed.
-- [ ] (pending) Implement Plan B dataset building for `fetch_stocktwits_messages`: record StockTwits sentiment text and distinguish empty results from source access failures where possible.
+- [x] (2026-07-14) Implemented and populated Plan B dataset building for
+  `fetch_stocktwits_messages`: reads the Stage 1 raw StockTwits JSON coverage files
+  under `data/raw-backtest/stocktwits`, renders 7-day lookback payloads in the same
+  summary and message-line format as the live helper, and writes replay rows without
+  calling the StockTwits API. Wrote 183 persistent `fetch_stocktwits_messages` rows
+  to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero
+  no-data rows.
 - [x] Implement Plan B dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
 - [x] (2026-06-18 14:16Z) Implemented and populated Plan B dataset building for `get_balance_sheet` through the shared Plan 07 builder path: records the yfinance latest balance-sheet statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_balance_sheet` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2026-01-21`; the evaluation-backed `get_balance_sheet` tool matched the live tool exactly and AAPL had one distinct payload across all 61 replay dates.
 - [x] (2026-06-18 14:24Z) Implemented and populated Plan B dataset building for `get_cashflow` through the shared Plan 07 builder path: records the yfinance latest cash flow statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_cashflow` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2026-01-09`; the evaluation-backed `get_cashflow` tool matched the live tool exactly and each ticker had one distinct payload across all 61 replay dates.
@@ -97,6 +103,19 @@ Use timestamps, for example `(2026-06-16 09:00Z)`, when checking items off so a 
   ticker/subreddit feeds, then completed with `posts_written: 900`,
   `payloads_written: 183`, `transaction_days: 61`, and
   `request_delay_seconds: 10.0`.
+- Observation (2026-07-14): Stage 1 StockTwits raw-file coverage is sufficient for
+  Plan B.
+  Evidence: the user completed the Stage 1 scanner with `reached_cutoff=True` for
+  AAPL, GOOGL, and AMZN. The oldest cutoff files were `AAPL-1739.json`,
+  `GOOGL-0695.json`, and `AMZN-1214.json`, all reaching 2025-12-17 before the
+  Plan B buffer cutoff of 2025-12-18.
+- Observation (2026-07-14): The Plan B StockTwits replay payloads match the live
+  helper's text contract when both are fed the same raw messages.
+  Evidence: a random validation picked GOOGL on `2026-02-12`; the dataset payload
+  exactly matched `fetch_stocktwits_messages("GOOGL", limit=30, timeout=10.0)` with
+  its HTTP JSON fetch replaced by the same selected raw messages from disk. The
+  shared summary was `Bullish: 11 (37%) · Bearish: 3 (10%) · Unlabeled: 16 · Total:
+  30 most-recent messages`.
 
 Add new observations here as they arise, with a short evidence snippet. Test output is ideal.
 
@@ -258,6 +277,28 @@ cash-flow statement writer that Plan B shares with Plan 07:
 The same cashflow payload is expected on later replay dates for a ticker because the
 live yfinance cashflow endpoint exposes the latest available cash-flow statement table,
 not a daily historical statement feed.
+
+Milestone 9 — Plan B `fetch_stocktwits_messages` tool-output builder (2026-07-14).
+Added the StockTwits replay writer needed for analyst sentiment replay:
+
+- `build_stocktwits_outputs()` loads raw StockTwits pages from
+  `data/raw-backtest/stocktwits`, dedupes messages by StockTwits message id, sorts
+  newest-first, filters to each transaction day's 7-day lookback window, and writes
+  prompt-ready `fetch_stocktwits_messages` rows.
+- `render_stocktwits_payload()` preserves the live helper's output shape: bullish,
+  bearish, unlabeled counts and percentages, followed by `[created_at · @user · tag]`
+  message lines capped by `settings.sentiment.stocktwits_limit`.
+- No StockTwits API call is made during dataset population; the builder consumes the
+  local raw JSON files produced by the coverage scanner.
+- Focused validation passed:
+  `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_trading_tools.py -q`
+  reported 48 passed.
+- Live population wrote 183 rows to `data/eval_dataset_2026q1.duckdb`, 61 each for
+  AAPL, GOOGL, and AMZN over `2026-01-02..2026-03-31`, with zero no-data rows.
+- Random parity check: GOOGL on `2026-02-12` used 1,804 raw messages in the 7-day
+  window and selected the newest 30. The dataset payload exactly matched the live
+  `fetch_stocktwits_messages` formatter when that helper was fed the same selected
+  raw messages instead of calling the network.
 
 Milestone 9 — Shared `get_income_statement` tool-output builder (2026-06-18). Added
 the income-statement writer that Plan B shares with Plan 07:
