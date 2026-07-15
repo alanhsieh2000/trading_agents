@@ -151,8 +151,8 @@ def test_scan_ticker_resumes_from_existing_cursor_and_sequence(tmp_path):
     assert made_request is True
     assert calls == [("AAPL", 90, 2)]
     assert result.reached_cutoff is True
-    assert result.files_written == (tmp_path / "AAPL-0002.json",)
-    assert (tmp_path / "AAPL-0002.json").exists()
+    assert result.files_written == (tmp_path / "AAPL-00002.json",)
+    assert (tmp_path / "AAPL-00002.json").exists()
 
 
 def test_scan_ticker_stops_when_cursor_more_false(tmp_path):
@@ -183,7 +183,52 @@ def test_scan_ticker_stops_when_cursor_more_false(tmp_path):
     assert calls == [("AMZN", None)]
     assert result.cursor_more is False
     assert result.reached_cutoff is False
-    assert result.files_written == (tmp_path / "AMZN-0001.json",)
+    assert result.files_written == (tmp_path / "AMZN-00001.json",)
+
+
+def test_scan_ticker_sorts_existing_files_by_numeric_sequence(tmp_path):
+    first = _payload(
+        "AAPL",
+        since=100,
+        max_id=90,
+        more=True,
+        created_at="2026-07-13T00:00:00Z",
+    )
+    latest = _payload(
+        "AAPL",
+        since=10,
+        max_id=5,
+        more=True,
+        created_at="2025-12-19T00:00:00Z",
+    )
+    (tmp_path / "AAPL-0001.json").write_text(json.dumps(first))
+    (tmp_path / "AAPL-10000.json").write_text(json.dumps(latest))
+    calls = []
+
+    def fake_fetch(ticker, *, max_id, timeout):
+        calls.append((ticker, max_id, timeout))
+        return _page(
+            _payload(
+                ticker,
+                since=4,
+                max_id=1,
+                more=True,
+                created_at="2025-12-17T23:59:00Z",
+            )
+        )
+
+    result, _made_request = scan_ticker_until_cutoff(
+        ticker="AAPL",
+        output_dir=tmp_path,
+        cutoff=_parse_cutoff("2025-12-18"),
+        delay_seconds=0,
+        timeout=2,
+        fetch_page=fake_fetch,
+        sleep=lambda _seconds: None,
+    )
+
+    assert calls == [("AAPL", 5, 2)]
+    assert result.files_written == (tmp_path / "AAPL-10001.json",)
 
 
 def test_scan_stage_waits_between_requests_including_between_tickers(tmp_path):

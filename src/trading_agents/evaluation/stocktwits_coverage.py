@@ -128,7 +128,9 @@ def scan_ticker_until_cutoff(
 ) -> tuple[TickerScanResult, bool]:
     """Continue one ticker's JSON sequence until coverage reaches ``cutoff``."""
     symbol = ticker.upper().strip()
-    existing = sorted(output_dir.glob(f"{symbol}-*.json"))
+    existing = sorted(
+        output_dir.glob(f"{symbol}-*.json"), key=lambda path: _sequence_from_path(path)
+    )
     existing_summary = summarize_ticker_files(symbol, existing)
     next_sequence = _next_sequence(existing)
     max_id = existing_summary.last_cursor_max
@@ -178,7 +180,7 @@ def summarize_ticker_files(ticker: str, paths: Sequence[Path]) -> TickerScanResu
     last_cursor_max: int | None = None
     cursor_more = True
     next_sequence = 1
-    for path in sorted(paths):
+    for path in sorted(paths, key=lambda path: _sequence_from_path(path)):
         payload = json.loads(path.read_text())
         summary = summarize_payload(payload)
         newest = _min_none_aware(newest, summary.newest_created_at, newest=True)
@@ -316,10 +318,10 @@ def _write_json_atomic(path: Path, content: bytes) -> None:
 
 
 def _next_available_path(output_dir: Path, ticker: str, sequence: int) -> Path:
-    path = output_dir / f"{ticker}-{sequence:04d}.json"
+    path = output_dir / f"{ticker}-{sequence:05d}.json"
     while path.exists():
         sequence += 1
-        path = output_dir / f"{ticker}-{sequence:04d}.json"
+        path = output_dir / f"{ticker}-{sequence:05d}.json"
     return path
 
 
