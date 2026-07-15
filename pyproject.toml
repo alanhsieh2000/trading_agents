@@ -32,6 +32,7 @@ scan-reddit-coverage = "trading_agents.evaluation.reddit_coverage:main"
 scan-stocktwits-coverage = "trading_agents.evaluation.stocktwits_coverage:main"
 build-eval-dataset = "trading_agents.evaluation.build_dataset:main"
 build-plan-b-eval-dataset = "trading_agents.evaluation.build_dataset:plan_b_main"
+patch-eval-reddit-arctic-shift = "trading_agents.evaluation.arctic_shift_patch:main"
 
 [build-system]
 requires = ["hatchling"]

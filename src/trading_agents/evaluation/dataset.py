@@ -21,6 +21,7 @@ duplicating them.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import duckdb
@@ -128,6 +129,65 @@ class EvalDataset:
                 in rows
             ],
         )
+
+    def matching_tool_output_dates(
+        self, tool_name: str, ticker: str, payload: str
+    ) -> list[str]:
+        """Return dates whose recorded output exactly matches ``payload``."""
+        rows = self._conn.execute(
+            "SELECT as_of_date FROM tool_outputs "
+            "WHERE tool_name = ? AND ticker = ? AND payload = ? ORDER BY as_of_date",
+            [tool_name, ticker.upper(), payload],
+        ).fetchall()
+        return [str(as_of_date) for (as_of_date,) in rows]
+
+    def replace_matching_tool_outputs(
+        self,
+        tool_name: str,
+        ticker: str,
+        replacements: Mapping[str, str],
+        *,
+        expected_payload: str,
+    ) -> int:
+        """Atomically replace guarded tool outputs and reject stale targets."""
+        symbol = ticker.upper()
+        dates = sorted(replacements)
+        if not dates:
+            return 0
+
+        self._conn.execute("BEGIN TRANSACTION")
+        try:
+            rows = self._conn.execute(
+                "SELECT as_of_date FROM tool_outputs "
+                "WHERE tool_name = ? AND ticker = ? AND payload = ? "
+                "AND as_of_date IN (SELECT UNNEST(?)) ORDER BY as_of_date",
+                [tool_name, symbol, expected_payload, dates],
+            ).fetchall()
+            guarded_dates = [str(as_of_date) for (as_of_date,) in rows]
+            if guarded_dates != dates:
+                raise RuntimeError(
+                    "Tool outputs changed before patch commit; no rows were updated"
+                )
+            self._conn.executemany(
+                "UPDATE tool_outputs SET payload = ? "
+                "WHERE tool_name = ? AND ticker = ? AND as_of_date = ? "
+                "AND payload = ?",
+                [
+                    (
+                        replacements[as_of_date],
+                        tool_name,
+                        symbol,
+                        as_of_date,
+                        expected_payload,
+                    )
+                    for as_of_date in dates
+                ],
+            )
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+        return len(dates)
 
     # -- reads ----------------------------------------------------------------
 

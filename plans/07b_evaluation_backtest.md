@@ -80,6 +80,13 @@ The concrete result values above are illustrative. The final implementation must
   repaired payloads retain 36 and 37 relevant articles, respectively; all 183
   `get_news` rows remain present and `tests/test_eval_dataset.py` passed with 8
   tests.
+- [x] (2026-07-15) Repaired the 30 GOOGL `fetch_reddit_posts` no-data payloads
+  from 2026-01-02 through 2026-02-13 with the targeted Arctic Shift patch CLI.
+  The run preserved 28 raw response files, fetched 133 unique posts across the
+  three configured subreddits, retained 68 posts after applying the live helper's
+  strict score/comment thresholds, and atomically replaced only the affected rows.
+  All 183 Reddit outputs remain present, no repaired payload includes a post later
+  than its trade date, and the other 153 payloads remained byte-identical.
 - [x] Implement Plan B dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
 - [x] (2026-06-18 14:16Z) Implemented and populated Plan B dataset building for `get_balance_sheet` through the shared Plan 07 builder path: records the yfinance latest balance-sheet statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_balance_sheet` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2026-01-21`; the evaluation-backed `get_balance_sheet` tool matched the live tool exactly and AAPL had one distinct payload across all 61 replay dates.
 - [x] (2026-06-18 14:24Z) Implemented and populated Plan B dataset building for `get_cashflow` through the shared Plan 07 builder path: records the yfinance latest cash flow statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_cashflow` rows to `data/eval_dataset_2026q1.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2026-01-09`; the evaluation-backed `get_cashflow` tool matched the live tool exactly and each ticker had one distinct payload across all 61 replay dates.
@@ -162,6 +169,12 @@ Use timestamps, for example `(2026-06-16 09:00Z)`, when checking items off so a 
   Evidence: the AAPL 2026-02-09 and 2026-02-10 payloads included a French housing
   article, and the latter also included an SNCF railway-toll article. Targeted
   offline repair removed all three stored article blocks without changing row counts.
+- Observation (2026-07-15): Arctic Shift keyword searches require both temporal
+  slicing and explicit rate-limit handling for repeatable historical collection.
+  Evidence: broad `stocks` and `investing` searches returned HTTP 422 timeouts, while
+  bounded slices succeeded; response headers exposed a slow-scope allowance of five
+  requests per reset window. The patch CLI waits one second between calls, subdivides
+  timed-out or full 100-record slices, and honors the reset delay after HTTP 429.
 
 Add new observations here as they arise, with a short evidence snippet. Test output is ideal.
 

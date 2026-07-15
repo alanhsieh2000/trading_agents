@@ -27,6 +27,22 @@ def test_tool_output_upsert_replaces(dataset):
     assert dataset.tool_output("get_news", "AAPL", "2024-01-03") == "v2"
 
 
+def test_replace_matching_tool_outputs_is_guarded_and_atomic(dataset):
+    dataset.put_tool_output("get_news", "AAPL", "2024-01-02", "old")
+    dataset.put_tool_output("get_news", "AAPL", "2024-01-03", "changed")
+
+    with pytest.raises(RuntimeError, match="no rows were updated"):
+        dataset.replace_matching_tool_outputs(
+            "get_news",
+            "AAPL",
+            {"2024-01-02": "new 1", "2024-01-03": "new 2"},
+            expected_payload="old",
+        )
+
+    assert dataset.tool_output("get_news", "AAPL", "2024-01-02") == "old"
+    assert dataset.tool_output("get_news", "AAPL", "2024-01-03") == "changed"
+
+
 def test_missing_tool_output_raises(dataset):
     with pytest.raises(KeyError):
         dataset.tool_output("get_news", "AAPL", "2024-01-03")
