@@ -39,12 +39,14 @@ Stage 1 succeeds for all tickers.
   behavior, cutoff stopping, `cursor.more` stopping, and inter-request delays.
 - [x] Added `--max-files` to cap the number of new JSON files downloaded by one
   scanner invocation.
-- [ ] Run the live scanner for AAPL, GOOGL, and AMZN through Stage 1.
-  A foreground attempt on 2026-07-14 was manually interrupted after writing
-  `AAPL-0003.json` through `AAPL-0027.json`; AAPL had only reached
-  `2026-07-09T15:45:05Z`, so Stage 1 did not complete.
-- [ ] If Stage 1 succeeds for all three tickers, continue through Stage 2.
-- [ ] Record the live scan output and per-ticker coverage summary in
+- [x] Run the live scanner for AAPL, GOOGL, and AMZN through Stage 1. The final
+  run succeeded without downloading additional files: AAPL and GOOGL already
+  covered the Stage 1 cutoff, while AMZN's existing files reached
+  `2024-04-03T14:02:25Z`, older than the `2025-12-18` cutoff.
+- [x] Continue through Stage 2 after Stage 1 succeeded for all three tickers.
+  AAPL and GOOGL already covered the older cutoff; AMZN wrote 620 additional
+  files and reached `2023-12-17T21:20:45Z`.
+- [x] Record the live scan output and per-ticker coverage summary in
   `Outcomes & Retrospective`.
 
 
@@ -84,6 +86,20 @@ Stage 1 succeeds for all tickers.
   Evidence: The default `--max-files` is 100. With the default 1-second delay and
   the observed AAPL timing, the command prints `It may take 132 seconds.` before
   starting Stage 1.
+- Observation: Both historical coverage gates are now satisfied for all configured
+  evaluation tickers.
+  Evidence: The completed Stage 2 scan reported `succeeded=True` and
+  `reached_cutoff=True` for AAPL, GOOGL, and AMZN; the latest sequence files were
+  `AAPL-10983.json`, `GOOGL-03562.json`, and `AMZN-06620.json`, whose oldest
+  messages were all before `2023-12-18T00:00:00Z`.
+- Observation: AAPL and GOOGL required no additional downloads in the final scan,
+  while AMZN needed 620 Stage 2 pages.
+  Evidence: Stage 1 reported `files_written=0` for all tickers. Stage 2 reported
+  `files_written=0` for AAPL and GOOGL and `files_written=620` for AMZN.
+- Observation: Mixed four- and five-digit sequence filenames required numeric
+  ordering once the scan passed 9,999 pages.
+  Evidence: Commit `39760ae` sorts existing paths by parsed sequence and emits
+  five-digit padding; its regression test covers resuming from `AAPL-10000.json`.
 
 Add new observations here as they arise, with a short evidence snippet.
 
@@ -114,6 +130,13 @@ Add new observations here as they arise, with a short evidence snippet.
   delays for five pages each with no HTTP errors, and the 10-second delay made the
   scan impractically slow for high-volume tickers.
   Date/Author: 2026-07-14 / Codex
+
+- Decision: Treat the Stage 2 scan as complete once every ticker has an observed
+  message strictly before the `2023-12-18` cutoff, even when `cursor.more=True`.
+  Rationale: The scanner's purpose is to prove the required two-week lookback,
+  not to exhaust StockTwits history. Each terminal JSON response contains a
+  message before the cutoff, so further pagination is unnecessary.
+  Date/Author: 2026-07-16 / Codex
 
 
 ## Implementation Notes
@@ -187,3 +210,37 @@ No HTTP errors or 429s occurred. The latest file after the capped timing run was
 
 The raw StockTwits folder was approximately 24 MB after this run. AAPL still had
 not reached the Stage 1 cutoff.
+
+Live completion run -- Stage 1 and Stage 2 (2026-07-16). The resumable scanner
+completed both coverage gates successfully.
+
+Stage 1 used cutoff `2025-12-18` and wrote no files:
+
+    succeeded=True
+    AAPL  files_written=0 newest=2026-07-13T07:52:07Z oldest=2023-12-17T19:26:11Z last_cursor_max=554850356 cursor_more=True reached_cutoff=True
+    GOOGL files_written=0 newest=2026-07-14T04:52:10Z oldest=2023-12-17T00:32:54Z last_cursor_max=554822856 cursor_more=True reached_cutoff=True
+    AMZN  files_written=0 newest=2026-07-14T04:26:38Z oldest=2024-04-03T14:02:25Z last_cursor_max=568237671 cursor_more=True reached_cutoff=True
+
+Stage 2 used cutoff `2023-12-18`. AAPL and GOOGL already had sufficient coverage;
+AMZN downloaded 620 files and then crossed the cutoff:
+
+    succeeded=True
+    AAPL  files_written=0   newest=2026-07-13T07:52:07Z oldest=2023-12-17T19:26:11Z last_cursor_max=554850356 cursor_more=True reached_cutoff=True
+    GOOGL files_written=0   newest=2026-07-14T04:52:10Z oldest=2023-12-17T00:32:54Z last_cursor_max=554822856 cursor_more=True reached_cutoff=True
+    AMZN  files_written=620 newest=2026-07-14T04:26:38Z oldest=2023-12-17T21:20:45Z last_cursor_max=554854435 cursor_more=True reached_cutoff=True
+
+The terminal JSON files independently confirm the reported coverage:
+
+    AAPL-10983.json messages=25 newest=2023-12-18T00:46:58Z oldest=2023-12-17T19:26:11Z cursor={'more': True, 'since': 554862386, 'max': 554850356}
+    GOOGL-03562.json messages=17 newest=2023-12-18T14:10:09Z oldest=2023-12-17T00:32:54Z cursor={'more': True, 'since': 554894235, 'max': 554822856}
+    AMZN-06620.json messages=28 newest=2023-12-18T04:41:15Z oldest=2023-12-17T21:20:45Z cursor={'more': True, 'since': 554871330, 'max': 554854435}
+
+Outcome: the raw StockTwits archive now supports the two-week sentiment lookbacks
+for both Plan B (`2026-01-01`) and Plan 07 (`2024-01-01`) for AAPL, GOOGL, and
+AMZN. The newest API cursor still reports `more=True` for every ticker, but no
+further fetching is required for these coverage gates.
+
+Plan revision (2026-07-16): recorded the completed Stage 1 and Stage 2 scanner
+results, verified them against the terminal raw JSON files, and documented the
+latest commit's filename-ordering fix because the archive now exceeds 9,999 AAPL
+pages.
