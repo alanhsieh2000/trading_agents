@@ -42,19 +42,20 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [x] (2026-06-11) Added `EvaluationSettings` to `src/trading_agents/config/settings.py`, wired it into `AppSettings`, and exported it from `config/__init__.py`.
 - [x] (2026-06-12 05:55Z) Added `exa-py` usage and an `EXA_API_KEY` requirement; created `src/trading_agents/evaluation/exa_sources.py` with historical news, global-news, Reddit, and StockTwits helpers plus unit tests.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/dataset.py` (DuckDB-backed `EvalDataset`, `tool_outputs` + `prices` tables, idempotent upserts).
-- [ ] (pending) Create the `build-eval-dataset` entry point in `src/trading_agents/evaluation/build_dataset.py`. The former `fetch_reddit_posts` availability/status gate is open: the checked-in Arctic Shift archive under `data/raw-backtest/arctic-shift/` is the canonical historical Reddit input for this evaluation, so the builder must validate and ingest that archive without making a live Reddit, Exa, or Arctic Shift request.
+- [ ] (pending) Create the `build-eval-dataset` entry point in `src/trading_agents/evaluation/build_dataset.py`. The historical social-source gates are open: the checked-in Arctic Shift and StockTwits archives under `data/raw-backtest/` are the canonical evaluation inputs, so the builder must validate and ingest both without making live Reddit, StockTwits, Exa, or Arctic Shift requests for social sentiment.
 - [x] (2026-06-17 00:00Z) Implemented the shared price-table and trading-day calendar build in `build_dataset.py`: write close prices for the selected evaluation tickers and the default benchmark ticker, SPY, before recording per-tool payloads.
 - [x] (2026-06-17 06:37Z) Implemented and populated shared dataset building for `get_stock_data`: recorded the market-data text block for each evaluation ticker and for SPY on each trading day using the same lookback window the analyst stage will request; SPY history is required by the portfolio manager's self-reflection and benchmark-relative realized-return calculations. Wrote 244 persistent `get_stock_data` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, SPY 61.
 - [x] (2026-06-17) Implemented and populated dataset building for `get_indicators`: records all allowed indicators from `src/trading_agents/tools/market_data.py` for each configured ticker and trading day using the analyst-stage lookback window. Wrote 183 persistent `get_indicators` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero SPY indicator rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison matched for `AMZN` on `2024-02-27` with 12 indicators.
 - [x] (2026-06-17 13:03Z) Implemented and populated shared dataset building for `get_news`: records ticker-news text through the Exa historical source layer with the same markdown/no-news/error contract as the live Yahoo-backed tool. The builder uses a doubled news limit (`settings.news.ticker_limit * 2`, currently 40) for buffer coverage, writes ticker rows only, and shares the same implementation with Plan B. Wrote 183 persistent `get_news` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AMZN on `2024-03-05`; the evaluation-backed `get_news` tool matched the DuckDB payload exactly and returned 39 articles for `2024-02-27..2024-03-05`.
 - [x] (2026-06-17) Implemented and populated shared dataset building for `get_global_news`: records one Exa historical global-market-news payload per trading day, stores it under each evaluated ticker key for existing dataset-backed tool replay, and uses a doubled global-news limit (`settings.news.global_limit * 2`, currently 20). Wrote 183 persistent `get_global_news` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-21`; the evaluation-backed `get_global_news` tool matched the DuckDB payload exactly and returned the shared global payload for all ticker keys on that date.
 - [ ] (pending) Implement dataset building for `fetch_reddit_posts`: parse, validate, deduplicate, and render the committed Arctic Shift JSON archive into the existing rich Reddit-sentiment text format for every ticker/trading day. Validate archive completeness and required fields before writing; fail clearly for malformed input or a missing ticker/date coverage window. Do not call the live Reddit/RSS, Exa, or Arctic Shift APIs during this build.
-- [ ] (pending) Implement dataset building for `fetch_stocktwits_messages`: record StockTwits sentiment text and distinguish empty results from source access failures where possible.
+- [ ] (pending) Implement dataset building for `fetch_stocktwits_messages`: parse, validate, chronologically order, deduplicate, and render the committed StockTwits JSON archive into the existing sentiment text format for every ticker/trading day. Validate archive completeness and required fields before writing; fail clearly for malformed input or missing ticker/date coverage. Do not call the live StockTwits or Exa APIs during this build.
 - [x] Implement dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
 - [x] (2026-06-18 14:16Z) Implemented and populated shared dataset building for `get_balance_sheet`: records the yfinance latest balance-sheet statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_balance_sheet` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-08`; the evaluation-backed `get_balance_sheet` tool matched the live tool exactly and AAPL had one distinct payload across all 61 replay dates.
 - [x] (2026-06-18 14:24Z) Implemented and populated shared dataset building for `get_cashflow`: records the yfinance latest cash flow statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_cashflow` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-01-12`; the evaluation-backed `get_cashflow` tool matched the live tool exactly and each ticker had one distinct payload across all 61 replay dates.
 - [x] (2026-06-18 14:30Z) Implemented and populated shared dataset building for `get_income_statement`: records the yfinance latest income statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_income_statement` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AMZN on `2024-02-28`; the evaluation-backed `get_income_statement` tool matched the live tool exactly and each ticker had one distinct payload across all 61 replay dates.
 - [x] (2026-07-16) Historical Reddit-source gate opened for the configured 2024-Q1 evaluation: Arctic Shift API responses were collected and retained under `data/raw-backtest/arctic-shift/` (210 JSON pages: AAPL 62, GOOGL 84, AMZN 64). The remaining work is offline archive validation and dataset ingestion, not a live-source probe or replacement-period scan.
+- [x] (2026-07-16) Historical StockTwits-source gate opened for the configured 2024-Q1 evaluation: retained pagination responses under `data/raw-backtest/stocktwits/` reach before the 2023-12-18 two-week-lookback cutoff for every ticker (21,165 JSON pages: AAPL 10,983, GOOGL 3,562, AMZN 6,620). The remaining work is offline archive validation and dataset ingestion, not live StockTwits pagination.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/eval_tools.py` (dataset-backed `DatasetBackedTool` + `build_dataset_tools`). Remaining: the analyst-crew tool-injection seam.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/backtest.py` (`simulate_position` + `cumulative_return`).
 - [ ] (pending) Create `src/trading_agents/evaluation/run_eval.py` and the `run-eval` entry point.
@@ -85,6 +86,13 @@ future contributor can gauge the rate of progress.
   exceptions are caught and converted to an empty post list. Therefore, the current
   fallback string does not distinguish true zero results from blocked or failed
   Reddit access.
+- Observation: The checked-in StockTwits pagination archive has sufficient historical
+  coverage for the Plan 07 two-week lookback for every evaluation ticker.
+  Evidence: Commit `a33bee20c7f866df994e8ca70c310cc9cd992ca1` records a successful
+  Stage 2 scan to the 2023-12-18 cutoff. Terminal pages reached 2023-12-17 for AAPL,
+  GOOGL, and AMZN; the archive contains 21,165 JSON pages (AAPL 10,983, GOOGL 3,562,
+  AMZN 6,620). The scanner's numeric filename-ordering fix handles the AAPL archive's
+  five-digit sequence numbers.
 - Observation: The original TradingAgents repository works around Reddit JSON
   blocking by using Reddit RSS/Atom search first.
   Evidence: `https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/dataflows/reddit.py`
@@ -231,6 +239,15 @@ is ideal).
   empty rendered window; it must fail before DuckDB writes for the first three cases.
   Date/Author: 2026-07-16 / Codex
 
+- Decision: Treat `data/raw-backtest/stocktwits/` as an immutable, auditable input
+  artifact rather than paginating StockTwits during dataset construction.
+  Rationale: The completed Stage 2 scanner has already demonstrated coverage through
+  the required two-week pre-window cutoff for AAPL, GOOGL, and AMZN. Offline parsing
+  makes replay reproducible and eliminates API rate-limit and cursor-resumption risk;
+  the builder must still reject malformed pages, missing fields, or insufficient
+  selected ticker/date coverage before writing DuckDB rows.
+  Date/Author: 2026-07-16 / Codex
+
 - Decision: Track the RSS-first live Reddit fix in Plan 01, but keep Plan 07's
   historical Reddit requirement separate.
   Rationale: RSS-first fetching should repair the current live `fetch_reddit_posts`
@@ -308,7 +325,7 @@ Lessons so far: the README's "61 transaction days" is exactly right (verified ag
 yfinance) — the earlier "~60 / Good Friday discrepancy" worry was unfounded.
 
 Milestone 2 — Exa source layer (2026-06-12 05:55Z). Delivered the historical
-news/social source helpers that the dataset builder will call:
+news/social source helpers that were initially planned for the dataset builder:
 
 - `src/trading_agents/evaluation/exa_sources.py` loads `.env`, requires `EXA_API_KEY`,
   constructs an `exa_py.Exa` client, and exposes helpers for ticker news, global market
@@ -320,7 +337,9 @@ news/social source helpers that the dataset builder will call:
   evaluation suite is now **23 passed** across Exa sources, dataset, and backtest.
 
 What remains after this milestone: create `build_dataset.py` and the
-`build-eval-dataset` entry point so these Exa helpers can populate the DuckDB dataset.
+`build-eval-dataset` entry point. The later completed Reddit and StockTwits archive
+collection supersedes the Exa social helpers for Plan 07 ingestion; Exa remains the
+historical source for news.
 
 Milestone 3 — Arctic Shift archive acquisition (2026-07-16). The former live Reddit
 availability/status gate is open: 210 historical Arctic Shift response pages were
@@ -502,12 +521,18 @@ Audited against the backtest window, queried from 2026:
 
 - Prices and indicators are fully available historically (`yf.download(start, end)`), so the builder can record them by calling the existing `get_stock_data_text` / `get_indicators_text`.
 - Financial statements return real filings but yfinance keeps only ~4 recent periods, so some 2023-2024 quarters may have rolled off; `get_fundamentals` (`.info`) is a current snapshot, not point-in-time. The builder records best-effort current values; SEC EDGAR is noted as a future point-in-time upgrade. This is acceptable because the profile and statement fields are slow-moving context, and the dominant CR drivers are price action and the daily decisions.
-- News (`get_news`, `get_global_news`) and StockTwits are **not** historically queryable through the existing tools, so the builder sources them from **Exa** with published-date filters. Reddit is read from the checked-in Arctic Shift archive instead.
+- News (`get_news`, `get_global_news`) is **not** historically queryable through the
+  existing tools, so the builder sources it from **Exa** with published-date filters.
+  Reddit and StockTwits are read from their checked-in historical archives instead.
 - Reddit is a required source for this evaluation, not an optional enhancement. The
   Arctic Shift gate is open: 210 raw response pages for AAPL, GOOGL, and AMZN are stored
   under `data/raw-backtest/arctic-shift/`. Dataset construction is therefore offline for
   Reddit and must validate the recorded corpus rather than probing a provider. Other
   builders remain independent of Reddit archive ingestion.
+- StockTwits is likewise a required source. Its completed two-stage pagination archive
+  contains 21,165 pages under `data/raw-backtest/stocktwits/` and reaches before
+  2023-12-18 for AAPL, GOOGL, and AMZN. Dataset construction must validate this local
+  corpus rather than make a StockTwits or Exa request.
 
 
 ## Plan of Work
@@ -535,12 +560,9 @@ blocks shaped like the existing tools' output, so downstream prompts are byte-fo
 familiar: `fetch_news_via_exa(query, start_date, end_date, limit)` (Exa `news` search
 with `start_published_date`/`end_published_date`, rendered in the
 `_format_news_block` style imported from `trading_agents.tools.news`),
-`fetch_global_news_via_exa(curr_date, look_back_days, limit)`,
-`fetch_stocktwits_via_exa(ticker, start_date, end_date, ...)` (domain-restricted Exa
-searches using `include_domains=["stocktwits.com"]`, rendered to match the sentiment
-block format, with a graceful "No data available …" fallback). Only the builder imports
-this module. Reddit archive parsing belongs in the dataset builder or a dedicated local
-archive helper; it does not require `EXA_API_KEY`.
+`fetch_global_news_via_exa(curr_date, look_back_days, limit)`. Only the builder imports
+this module. Reddit and StockTwits archive parsing belongs in the dataset builder or
+dedicated local archive helpers; neither requires `EXA_API_KEY`.
 
 Third, add the dataset layer `src/trading_agents/evaluation/dataset.py`. Define
 `EvalDataset` wrapping a DuckDB connection with two tables created on demand:
@@ -561,8 +583,8 @@ derive the trading-day list from the benchmark price index within the window. Fo
 ticker × trading day, the tool-specific builders record into `tool_outputs` the text
 from `get_stock_data_text`/`get_indicators_text` (called with the same
 `start = trade_date − lookback_days`, `end = trade_date` the eval flow uses), the Exa
-news and global-news blocks, the Exa StockTwits block, the Arctic Shift archive-derived
-Reddit block, and
+news and global-news blocks, the StockTwits archive-derived block, the Arctic Shift
+archive-derived Reddit block, and
 best-effort fundamentals/statement text. Use `EvalDataset.put_prices()` and
 `put_tool_output()` so the build is idempotent. Support `--tickers` and `--limit-days`.
 
@@ -573,6 +595,16 @@ Reddit post ID, and confirm the selected ticker/date windows can be rendered fro
 archive. A malformed page, missing field, or insufficient corpus coverage is a hard
 failure; a valid zero-post lookback renders the normal no-data text. This local gate must
 not prevent the other nine analyst tools from being implemented or collected.
+
+The StockTwits archive-validation gate is likewise local and belongs only to the
+`fetch_stocktwits_messages` builder step. Before any StockTwits `tool_outputs` writes,
+parse all selected pagination pages, enforce the expected message and cursor schema,
+sort files by numeric sequence (not lexical filename order), deduplicate messages, and
+confirm the selected ticker/date windows are covered through the required pre-window
+lookback. A malformed page, missing field, non-monotonic/ambiguous page sequence, or
+insufficient coverage is a hard failure; a valid zero-message lookback renders the
+normal no-data text. This local gate must not prevent the other nine analyst tools from
+being implemented or collected.
 
 When implementing the `get_stock_data` portion, include the default benchmark ticker,
 SPY, in addition to AAPL, GOOGL, and AMZN. SPY is not just a calendar source: the
@@ -594,6 +626,10 @@ requests exceeded Reddit's tight shared budget. That operational constraint no l
 applies to Plan 07 ingestion because it reads the local Arctic Shift archive. Preserve
 the archive unchanged, make no network request, and distinguish a valid empty lookback
 from malformed or incomplete archive input.
+
+Apply the same offline principle to StockTwits: preserve the pagination archive
+unchanged, make no network request, order its mixed-width sequence filenames numerically,
+and distinguish a valid empty lookback from malformed or incomplete archive input.
 
 After each dataset-building step is coded and validated with the needed focused tests,
 run the corresponding builder and persist the collected rows into every applicable
@@ -698,15 +734,15 @@ Run all commands from `/app/trading_agents`.
    rows through a temporary DuckDB file and confirm a dataset-backed eval tool returns the
    recorded payload.
 
-4. Before writing Reddit payloads, validate the checked-in Arctic Shift archive (no
-   network):
+4. Before writing social-sentiment payloads, validate the checked-in Arctic Shift and
+   StockTwits archives (no network):
 
        uv run build-eval-dataset --tickers AAPL --limit-days 3
 
-   Expected: the Reddit builder reports the archive page/post counts, selected ticker
-   coverage, duplicate count, and rendered ticker-day rows. It must fail before Reddit
+   Expected: each social builder reports archive page/message counts, selected ticker
+   coverage, duplicate count, and rendered ticker-day rows. It must fail before its
    writes if a selected page is malformed, a required field is absent, or the requested
-   lookback cannot be covered. It must not call Reddit, Exa, or Arctic Shift.
+   lookback cannot be covered. It must not call Reddit, StockTwits, Exa, or Arctic Shift.
 
 5. Build each small dataset slice after its code and focused tests pass:
 
@@ -714,8 +750,8 @@ Run all commands from `/app/trading_agents`.
 
    Expected: collect the implemented source slice and print a summary naming the DuckDB
    file, tool name, tickers, covered trading days, row count, and warnings. The Reddit
-   builder first validates the local Arctic Shift archive; no provider availability gate
-   or live social-data request remains.
+   builders first validate their local archives; no provider availability gate or live
+   social-data request remains.
 
    When a new source builder is complete, run it for both Plan 07 and Plan B if the
    source applies to both datasets, then summarize both collected slices for user
@@ -754,12 +790,14 @@ Acceptance is behavioral:
   tests fail on a clean checkout before this plan and pass after.
 - `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py`
   passes after the builder is added. The builder tests must mock Exa/yfinance as needed
-  and use archive fixtures to assert schema validation, ID deduplication, historical
-  lookback boundaries, rich-payload rendering, and no Reddit/Exa/Arctic Shift network
-  call during Reddit ingestion.
-- The Reddit archive builder rejects malformed pages, missing required fields, and
-  insufficient requested ticker/date coverage before it creates or updates Reddit
-  `tool_outputs` rows. Valid empty lookback windows retain the ordinary no-data payload.
+  and use archive fixtures to assert schema validation, ID/message deduplication,
+  numeric StockTwits filename ordering, historical lookback boundaries, rich-payload
+  rendering, and no Reddit/StockTwits/Exa/Arctic Shift network call during social
+  ingestion.
+- The Reddit and StockTwits archive builders reject malformed pages, missing required
+  fields, and insufficient requested ticker/date coverage before they create or update
+  their `tool_outputs` rows. Valid empty lookback windows retain the ordinary no-data
+  payload.
 - `uv run build-eval-dataset --tickers AAPL --limit-days 3` produces a DuckDB file with
   the expected implemented `tool_outputs` and `prices` rows, and is idempotent (running
   it twice does not duplicate rows). For each newly implemented non-Reddit source, data
@@ -778,10 +816,11 @@ position is ever taken) as a percentage.
 
 ## Idempotence and Recovery
 
-The local Arctic Shift archive-validation gate runs before writing Reddit `tool_outputs`
-rows. If the archive is malformed or lacks required selected coverage, the Reddit
-builder fails with a clear report and leaves existing rows intact. The archive itself is
-never rewritten by the builder. Missing or degraded archive input must not block
+The local Arctic Shift and StockTwits archive-validation gates run before writing their
+respective sentiment `tool_outputs` rows. If either selected archive is malformed or
+lacks required selected coverage, that builder fails with a clear report and leaves
+existing rows intact. The archives themselves are never rewritten by the builder.
+Missing or degraded archive input must not block
 collection for prices, `get_stock_data`, `get_indicators`, `get_news`,
 `get_global_news`, `fetch_stocktwits_messages`, or fundamentals/statement tools.
 
@@ -806,6 +845,12 @@ Representative builder summary (illustrative):
     AMZN   pages=64   posts=<parsed>   ticker-day rows=61
     Reddit payloads rendered offline; no live social-source requests made.
 
+    StockTwits archive validation — data/raw-backtest/stocktwits
+    AAPL   pages=10983  cutoff=2023-12-18 reached
+    GOOGL  pages=3562   cutoff=2023-12-18 reached
+    AMZN   pages=6620   cutoff=2023-12-18 reached
+    StockTwits payloads rendered offline; no live social-source requests made.
+
 Representative successful builder summary (illustrative):
 
     Built data/eval_dataset.duckdb
@@ -825,10 +870,10 @@ Representative evaluation report (illustrative):
 Known limitations to keep in mind: fundamentals and yfinance financial statements are
 best-effort latest snapshots, not point-in-time daily history; the trading-day count is
 derived from the actual price calendar and equals the README's 61 (2024-01-02 ..
-2024-03-28, with 2024-03-29 a closed holiday); Reddit archive ingestion still needs to
-be implemented and validated, although historical source access is no longer the
-blocker; and the full run is language-model-expensive (3 × 61 = 183 flow runs), which is
-why `--limit-days` exists.
+2024-03-28, with 2024-03-29 a closed holiday); Reddit and StockTwits archive ingestion
+still needs to be implemented and validated, although historical source access is no
+longer the blocker; and the full run is language-model-expensive (3 × 61 = 183 flow
+runs), which is why `--limit-days` exists.
 
 
 ## Interfaces and Dependencies
@@ -874,7 +919,6 @@ In `src/trading_agents/evaluation/exa_sources.py`:
 
     def fetch_news_via_exa(query: str, start_date: str, end_date: str, limit: int) -> str: ...
     def fetch_global_news_via_exa(curr_date: str, look_back_days: int, limit: int) -> str: ...
-    def fetch_stocktwits_via_exa(ticker: str, start_date: str, end_date: str, limit: int) -> str: ...
 
 In `src/trading_agents/evaluation/build_dataset.py` and `run_eval.py`, a `main()` each,
 registered as `build-eval-dataset` and `run-eval` in `pyproject.toml`.
@@ -885,13 +929,15 @@ observable behaviors:
     def main(argv: list[str] | None = None) -> int: ...
     def load_arctic_shift_posts(raw_dir: Path, tickers: list[str]) -> "ArcticShiftArchive": ...
     def validate_arctic_shift_coverage(archive: "ArcticShiftArchive", tickers: list[str], trade_dates: list[str]) -> None: ...
+    def load_stocktwits_messages(raw_dir: Path, tickers: list[str]) -> "StockTwitsArchive": ...
+    def validate_stocktwits_coverage(archive: "StockTwitsArchive", tickers: list[str], trade_dates: list[str]) -> None: ...
     def build_dataset(tickers: list[str], limit_days: int | None = None) -> "BuildSummary": ...
     def build_price_table(options: "BuildDatasetOptions", dataset: EvalDataset) -> "PriceBuildResult": ...
 
-`main()` parses `--tickers` and `--limit-days`. The archive loader must expose enough
-structured data for tests to assert page validation, duplicate handling, and ticker/date
-coverage. `build_dataset()` and the non-Reddit builders must not depend on Reddit archive
-ingestion.
+`main()` parses `--tickers` and `--limit-days`. The archive loaders must expose enough
+structured data for tests to assert page validation, numeric filename ordering,
+duplicate handling, and ticker/date coverage. `build_dataset()` and non-social builders
+must not depend on social archive ingestion.
 
 The analyst crew (`src/trading_agents/crews/analyst_crew/analyst_crew.py`) must keep its
 existing public functions `run_analyst_stage`, `prepare_analyst_inputs`, and
@@ -935,3 +981,12 @@ pages: AAPL 62, GOOGL 84, AMZN 64). Plan 07 now specifies offline validation, pa
 deduplication, and rendering of that archive; it removes the live Exa/Reddit availability
 probe and replacement-period scan from the implementation path. This changes neither the
 live Reddit RSS behavior nor any plan implementation status.
+
+Revision Note: 2026-07-16 The `fetch_stocktwits_messages` source gate is also open.
+Commit `a33bee20c7f866df994e8ca70c310cc9cd992ca1` records successful Stage 1 and Stage
+2 coverage scans. The retained archive under `data/raw-backtest/stocktwits/` contains
+21,165 pagination JSON pages (AAPL 10,983, GOOGL 3,562, AMZN 6,620), with all terminal
+sequences reaching before the Plan 07 2023-12-18 two-week-lookback cutoff. Plan 07 now
+specifies offline validation, numeric ordering, deduplication, and rendering of this
+archive rather than Exa search or live StockTwits pagination. This changes neither live
+StockTwits behavior nor any plan implementation status.
