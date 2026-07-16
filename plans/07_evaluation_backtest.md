@@ -48,7 +48,7 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [x] (2026-06-17) Implemented and populated dataset building for `get_indicators`: records all allowed indicators from `src/trading_agents/tools/market_data.py` for each configured ticker and trading day using the analyst-stage lookback window. Wrote 183 persistent `get_indicators` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero SPY indicator rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison matched for `AMZN` on `2024-02-27` with 12 indicators.
 - [x] (2026-06-17 13:03Z) Implemented and populated shared dataset building for `get_news`: records ticker-news text through the Exa historical source layer with the same markdown/no-news/error contract as the live Yahoo-backed tool. The builder uses a doubled news limit (`settings.news.ticker_limit * 2`, currently 40) for buffer coverage, writes ticker rows only, and shares the same implementation with Plan B. Wrote 183 persistent `get_news` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AMZN on `2024-03-05`; the evaluation-backed `get_news` tool matched the DuckDB payload exactly and returned 39 articles for `2024-02-27..2024-03-05`.
 - [x] (2026-06-17) Implemented and populated shared dataset building for `get_global_news`: records one Exa historical global-market-news payload per trading day, stores it under each evaluated ticker key for existing dataset-backed tool replay, and uses a doubled global-news limit (`settings.news.global_limit * 2`, currently 20). Wrote 183 persistent `get_global_news` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-21`; the evaluation-backed `get_global_news` tool matched the DuckDB payload exactly and returned the shared global payload for all ticker keys on that date.
-- [ ] (pending) Implement dataset building for `fetch_reddit_posts`: parse, validate, deduplicate, and render the committed Arctic Shift JSON archive into the existing rich Reddit-sentiment text format for every ticker/trading day. Validate archive completeness and required fields before writing; fail clearly for malformed input or a missing ticker/date coverage window. Do not call the live Reddit/RSS, Exa, or Arctic Shift APIs during this build.
+- [ ] (pending) Implement dataset building for `fetch_reddit_posts`: parse, validate, deduplicate, and render the committed Arctic Shift JSON archive into the same rich Reddit-sentiment format as `fetch_reddit_posts()` in `tools/sentiment.py`, including post date, score, comment count, title, and body excerpt. Arctic Shift supplies `score` and `num_comments`, so dataset preparation must use this archive—not Reddit RSS. Validate archive completeness and required fields before writing; fail clearly for malformed input or a missing ticker/date coverage window. Do not call the live Reddit/RSS, Exa, or Arctic Shift APIs during this build.
 - [ ] (pending) Implement dataset building for `fetch_stocktwits_messages`: parse, validate, chronologically order, deduplicate, and render the committed StockTwits JSON archive into the existing sentiment text format for every ticker/trading day. Validate archive completeness and required fields before writing; fail clearly for malformed input or missing ticker/date coverage. Do not call the live StockTwits or Exa APIs during this build.
 - [x] Implement dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
 - [x] (2026-06-18 14:16Z) Implemented and populated shared dataset building for `get_balance_sheet`: records the yfinance latest balance-sheet statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_balance_sheet` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-08`; the evaluation-backed `get_balance_sheet` tool matched the live tool exactly and AAPL had one distinct payload across all 61 replay dates.
@@ -102,6 +102,13 @@ future contributor can gauge the rate of progress.
   returned HTTP 200 with two Atom entries dated 2026-06-10 and 2026-06-09. This is
   useful for fixing live Reddit fetching, but it still does not provide exact
   historical date-range access for the 2024-Q1 backtest.
+- Observation: Arctic Shift preserves the post-engagement fields needed to reproduce
+  the rich live `fetch_reddit_posts()` presentation, unlike the RSS archive path.
+  Evidence: Arctic Shift post responses include `score` and `num_comments` together
+  with timestamps, subreddit, title, and selftext. The live formatter in
+  `src/trading_agents/tools/sentiment.py` presents post date, score, comment count,
+  title, and body excerpt. Therefore the evaluation can render format-equivalent
+  historical payloads from Arctic Shift without substituting Reddit RSS.
 - Observation: `exa-py` is already a declared dependency but is unused in the
   codebase, and Exa's search API supports `start_published_date`/`end_published_date`.
   Evidence: `pyproject.toml` lists `exa-py>=2.13.0`; a repository-wide grep finds no import of it. Exa's `/search` documents published-date filters for the `news` category and for uncategorized searches.
@@ -237,6 +244,15 @@ is ideal).
   the need for a live availability/status probe. Archive parsing still distinguishes
   malformed pages, missing required fields, and insufficient date coverage from a valid
   empty rendered window; it must fail before DuckDB writes for the first three cases.
+  Date/Author: 2026-07-16 / Codex
+
+- Decision: Use Arctic Shift exclusively—not Reddit RSS—to prepare Plan 07 Reddit
+  dataset payloads, and render its retained posts in the live `fetch_reddit_posts()`
+  rich format.
+  Rationale: Arctic Shift supplies `score` and `num_comments` as well as the textual
+  fields, enabling the historical payload to include the same engagement metadata as
+  the live sentiment tool. RSS remains relevant only to the separate live-fetch repair;
+  it is not a dataset-preparation fallback for this evaluation.
   Date/Author: 2026-07-16 / Codex
 
 - Decision: Treat `data/raw-backtest/stocktwits/` as an immutable, auditable input
@@ -591,8 +607,10 @@ best-effort fundamentals/statement text. Use `EvalDataset.put_prices()` and
 The Arctic Shift archive-validation gate is local and belongs only to the
 `fetch_reddit_posts` builder step. Before any Reddit `tool_outputs` writes, parse all
 selected archive pages, enforce the expected JSON schema and timestamps, deduplicate by
-Reddit post ID, and confirm the selected ticker/date windows can be rendered from the
-archive. A malformed page, missing field, or insufficient corpus coverage is a hard
+Reddit post ID, require `score` and `num_comments`, and confirm the selected ticker/date
+windows can be rendered from the archive. Render the same date/score/comment-count/title/
+body-excerpt shape as live `fetch_reddit_posts()`; do not use Reddit RSS for dataset
+preparation. A malformed page, missing field, or insufficient corpus coverage is a hard
 failure; a valid zero-post lookback renders the normal no-data text. This local gate must
 not prevent the other nine analyst tools from being implemented or collected.
 
