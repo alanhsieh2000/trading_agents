@@ -32,7 +32,11 @@ from trading_agents.evaluation.reddit_coverage import (
     RedditPost,
     fetch_rss_posts,
 )
-from trading_agents.tools.fundamentals import get_fundamentals_text, get_statement_text
+from trading_agents.evaluation.sec_sources import (
+    ensure_sec_archive,
+    render_point_in_time_fundamentals,
+)
+from trading_agents.tools.fundamentals import get_statement_text
 from trading_agents.tools.market_data import (
     ALLOWED_INDICATORS,
     INDICATOR_MIN_WARMUP_ROWS,
@@ -1075,13 +1079,45 @@ def build_fundamentals_outputs(
     dataset: EvalDataset,
     transaction_days: Sequence[str],
 ) -> ToolOutputBuildResult:
-    """Record replayable ``get_fundamentals`` payloads for each ticker and day."""
-    return build_snapshot_tool_outputs(
+    """Record point-in-time SEC fundamentals for each ticker and day."""
+    symbols = _symbols_for_indicator_outputs(options)
+    if not transaction_days:
+        return ToolOutputBuildResult(
+            tool_name="get_fundamentals",
+            symbols=symbols,
+            payloads_written=0,
+            transaction_days=(),
+            lookback_days=0,
+        )
+
+    archive = ensure_sec_archive(symbols, transaction_days)
+    payload_rows: list[tuple[str, str, str, str]] = []
+    for symbol in symbols:
+        prices = dataset.close_series(symbol)
+        for as_of_date in transaction_days:
+            payload = render_point_in_time_fundamentals(
+                archive,
+                symbol,
+                as_of_date,
+                prices,
+            )
+            if not payload.startswith(
+                f"Point-in-time fundamentals for {symbol} as of {as_of_date}."
+            ):
+                raise RuntimeError(
+                    f"Could not render SEC fundamentals for {symbol} on {as_of_date}."
+                )
+            payload_rows.append(
+                ("get_fundamentals", symbol, as_of_date, payload)
+            )
+
+    dataset.put_tool_outputs(payload_rows)
+    return ToolOutputBuildResult(
         tool_name="get_fundamentals",
-        render_payload=get_fundamentals_text,
-        options=options,
-        dataset=dataset,
-        transaction_days=transaction_days,
+        symbols=symbols,
+        payloads_written=len(payload_rows),
+        transaction_days=tuple(transaction_days),
+        lookback_days=0,
     )
 
 

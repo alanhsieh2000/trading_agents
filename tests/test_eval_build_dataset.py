@@ -943,17 +943,24 @@ def test_build_stocktwits_outputs_validates_before_writing(tmp_path):
         )
 
 
-def test_build_fundamentals_outputs_writes_tickers_only_and_reuses_snapshot(
+def test_build_fundamentals_outputs_writes_point_in_time_payloads_atomically(
     monkeypatch, tmp_path
 ):
-    calls = []
+    archive = object()
+    archive_calls = []
+    render_calls = []
 
-    def fake_get_fundamentals_text(ticker):
-        calls.append(ticker)
-        return f"{ticker} fundamentals snapshot"
+    def fake_ensure_sec_archive(tickers, trade_dates):
+        archive_calls.append((tickers, trade_dates))
+        return archive
 
+    def fake_render(loaded_archive, ticker, as_of_date, prices):
+        render_calls.append((loaded_archive, ticker, as_of_date, prices))
+        return f"Point-in-time fundamentals for {ticker} as of {as_of_date}.\nSEC"
+
+    monkeypatch.setattr(build_dataset, "ensure_sec_archive", fake_ensure_sec_archive)
     monkeypatch.setattr(
-        build_dataset, "get_fundamentals_text", fake_get_fundamentals_text
+        build_dataset, "render_point_in_time_fundamentals", fake_render
     )
     options = build_dataset.BuildDatasetOptions(
         dataset_path=str(tmp_path / "eval.duckdb"),
@@ -971,6 +978,12 @@ def test_build_fundamentals_outputs_writes_tickers_only_and_reuses_snapshot(
     )
 
     with EvalDataset(options.dataset_path) as dataset:
+        dataset.put_prices(
+            "AAPL", [("2025-12-01", 100.0), ("2025-12-02", 101.0)]
+        )
+        dataset.put_prices(
+            "GOOGL", [("2025-12-01", 200.0), ("2025-12-02", 201.0)]
+        )
         result = build_dataset.build_fundamentals_outputs(
             options, dataset, ["2025-12-02", "2025-12-03"]
         )
@@ -978,14 +991,75 @@ def test_build_fundamentals_outputs_writes_tickers_only_and_reuses_snapshot(
         aapl_second = dataset.tool_output("get_fundamentals", "AAPL", "2025-12-03")
         googl_payload = dataset.tool_output("get_fundamentals", "GOOGL", "2025-12-03")
 
-    assert calls == ["AAPL", "GOOGL"]
+    assert archive_calls == [
+        (("AAPL", "GOOGL"), ["2025-12-02", "2025-12-03"])
+    ]
+    assert len(render_calls) == 4
+    assert all(call[0] is archive for call in render_calls)
+    assert render_calls[0][3] == [("2025-12-01", 100.0), ("2025-12-02", 101.0)]
     assert result.tool_name == "get_fundamentals"
     assert result.symbols == ("AAPL", "GOOGL")
     assert result.payloads_written == 4
     assert result.lookback_days == 0
-    assert aapl_first == "AAPL fundamentals snapshot"
-    assert aapl_second == aapl_first
-    assert googl_payload == "GOOGL fundamentals snapshot"
+    assert aapl_first.startswith(
+        "Point-in-time fundamentals for AAPL as of 2025-12-02."
+    )
+    assert aapl_second.startswith(
+        "Point-in-time fundamentals for AAPL as of 2025-12-03."
+    )
+    assert googl_payload.startswith(
+        "Point-in-time fundamentals for GOOGL as of 2025-12-03."
+    )
+
+
+def test_build_fundamentals_outputs_preserves_rows_when_rendering_fails(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(build_dataset, "ensure_sec_archive", lambda *_: object())
+
+    def fail_second_date(_archive, ticker, as_of_date, _prices):
+        if as_of_date == "2025-12-03":
+            raise RuntimeError("malformed filing")
+        return f"Point-in-time fundamentals for {ticker} as of {as_of_date}.\nSEC"
+
+    monkeypatch.setattr(
+        build_dataset, "render_point_in_time_fundamentals", fail_second_date
+    )
+    options = build_dataset.BuildDatasetOptions(
+        dataset_path=str(tmp_path / "eval.duckdb"),
+        tickers=("AAPL",),
+        benchmark="SPY",
+        start_date="2025-12-02",
+        end_date="2025-12-04",
+        buffer_start_date="2025-12-01",
+        price_tail_days=2,
+        lookback_days=3,
+        weight_over=0.5,
+        weight_under=0.5,
+        limit_days=None,
+        verify_only=False,
+    )
+
+    with EvalDataset(options.dataset_path) as dataset:
+        dataset.put_prices("AAPL", [("2025-12-01", 100.0)])
+        dataset.put_tool_output(
+            "get_fundamentals", "AAPL", "2025-12-02", "old-first"
+        )
+        dataset.put_tool_output(
+            "get_fundamentals", "AAPL", "2025-12-03", "old-second"
+        )
+        with pytest.raises(RuntimeError, match="malformed filing"):
+            build_dataset.build_fundamentals_outputs(
+                options, dataset, ["2025-12-02", "2025-12-03"]
+            )
+        assert (
+            dataset.tool_output("get_fundamentals", "AAPL", "2025-12-02")
+            == "old-first"
+        )
+        assert (
+            dataset.tool_output("get_fundamentals", "AAPL", "2025-12-03")
+            == "old-second"
+        )
 
 
 def test_build_balance_sheet_outputs_writes_tickers_only_and_reuses_snapshot(
@@ -1184,10 +1258,13 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
             },
         ),
     )
+    monkeypatch.setattr(build_dataset, "ensure_sec_archive", lambda *_: object())
     monkeypatch.setattr(
         build_dataset,
-        "get_fundamentals_text",
-        lambda ticker: f"{ticker} fundamentals snapshot",
+        "render_point_in_time_fundamentals",
+        lambda _archive, ticker, as_of_date, _prices: (
+            f"Point-in-time fundamentals for {ticker} as of {as_of_date}.\nSEC"
+        ),
     )
     monkeypatch.setattr(
         build_dataset,

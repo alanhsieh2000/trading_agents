@@ -54,6 +54,7 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [x] (2026-07-17 08:02Z) Implemented canonical dataset building for `fetch_stocktwits_messages`: validates all 21,165 retained pagination pages, their numeric filename sequence, symbol/cursor/message schemas, decreasing cursor bounds, page chronology, duplicate consistency, and full replay-window coverage before writes. Messages are chronologically normalized and rendered in the live sentiment format without StockTwits or Exa calls. Populated 183 payloads in `data/eval_dataset.duckdb` (61 per ticker); every payload contains the configured 30 messages. Focused validation reported 69 passed.
 - [x] Implement dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
 - [x] (2026-07-17 14:58Z) Corrected AMZN dividend-yield reporting without a ticker-specific exception. The formatter now prefers Yahoo's percentage-point `dividendYield` and falls back to `trailingAnnualDividendYield * 100`; Yahoo's explicit trailing zero therefore renders as `Dividend yield: 0` instead of a missing field. Atomically replaced only the 61 AMZN `get_fundamentals` rows. All 61 contain the zero value, none retain the missing warning, the other 1,830 tool outputs retain SHA-256 `6b7d21158488f67a6927c943969e50ac3a848a5c8362e28b262a11b62c3121e6`, focused validation reports 76 passed, and the full suite reports 194 passed.
+- [x] (2026-07-17 16:16Z) Replaced all 183 `get_fundamentals` replay payloads with SEC-backed point-in-time fundamentals. The builder loads `SEC_UA` from `.env`, archives SEC submissions/companyfacts and the required 10-K/10-Q filing packages under `data/raw-backtest/SEC`, validates the manifest before reuse, selects only filings strictly before each replay date, and uses only prior closes for market-derived values. The refreshed DuckDB has 61 rows each for AAPL, GOOGL, and AMZN, 183 distinct fundamentals payloads, zero current-snapshot markers, and zero point-in-time audit issues. The six source filings are AAPL `0000320193-23-000106`/`0000320193-24-000006`, GOOGL `0001652044-23-000094`/`0001652044-24-000022`, and AMZN `0001018724-23-000018`/`0001018724-24-000008`. The fundamentals rows now hash to `3fe1dde177879fba3950746441151889f038ddc6885cb91a469a4ddcc7f69d72`; all non-fundamentals rows hash to `745b4ad85b5b62b2b4b27c864d958c8e7d050641da59b7d42dcb51278a092d1b`; the full DuckDB hashes to `0a0d5408e8456dc880d49f9ea392eb71d3fc507092c631d1470e8d79460b8b25`. Focused validation reported 41 passed, and the full suite reported 201 passed.
 - [x] (2026-06-18 14:16Z) Implemented and populated shared dataset building for `get_balance_sheet`: records the yfinance latest balance-sheet statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_balance_sheet` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-08`; the evaluation-backed `get_balance_sheet` tool matched the live tool exactly and AAPL had one distinct payload across all 61 replay dates.
 - [x] (2026-06-18 14:24Z) Implemented and populated shared dataset building for `get_cashflow`: records the yfinance latest cash flow statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_cashflow` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-01-12`; the evaluation-backed `get_cashflow` tool matched the live tool exactly and each ticker had one distinct payload across all 61 replay dates.
 - [x] (2026-06-18 14:30Z) Implemented and populated shared dataset building for `get_income_statement`: records the yfinance latest income statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_income_statement` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AMZN on `2024-02-28`; the evaluation-backed `get_income_statement` tool matched the live tool exactly and each ticker had one distinct payload across all 61 replay dates.
@@ -68,15 +69,14 @@ makes the evaluation reproducible and offline (apart from the language-model cal
   1,051 raw Reddit rows for missing records, no-data fallbacks, stored HTTP/API errors,
   time bounds, malformed payloads, and suspicious future content. Key coverage is
   complete and no stored API/runtime errors were found, but the dataset is not ready:
-  current fundamentals and 2024/2025 financial statements leak post-trade
-  information into all replay dates; confirmed future/unrelated ticker and global news
-  contaminates multiple rows; and 133 unused GOOGL raw Reddit posts are dated in
-  2025-12-19..2026-02-13.
+  2024/2025 financial statements still leak post-trade information into all replay
+  dates; confirmed future/unrelated ticker and global news contaminates multiple rows;
+  and 133 unused GOOGL raw Reddit posts are dated in 2025-12-19..2026-02-13.
 - [ ] (pending) Resolve the dataset-readiness audit findings before the smoke evaluation:
-  replace or explicitly remove point-in-time-unsafe fundamentals/statements, repair or
+  replace or explicitly remove point-in-time-unsafe financial statements, repair or
   exclude contaminated news blocks, and remove future raw Reddit rows from the canonical
-  artifact. The Reddit replay-output and indicator warm-up findings are resolved; the
-  future raw-row cleanup remains separate.
+  artifact. The Reddit replay-output, indicator warm-up, and fundamentals findings are
+  resolved; the future raw-row cleanup remains separate.
 - [ ] (pending) Run the full evaluation and record CR per stock in `Outcomes & Retrospective`.
 
 Use timestamps (for example `(2026-06-11 09:00Z)`) when checking items off so a
@@ -127,13 +127,14 @@ future contributor can gauge the rate of progress.
   present, with no stored HTTP/API/runtime errors. The six GOOGL Reddit payloads originally
   appeared as no-data fallbacks, and all 183 indicator payloads originally had blank
   first-row `boll_lb` and `boll_ub`; all 183 current-fundamentals rows and all 549
-  financial-statement rows use
+  financial-statement rows originally used
   snapshots unavailable on their 2024-Q1 trade dates; at least 29 ticker-news rows and
   18 replicated global-news rows contain confirmed future/unrelated material; and the
   raw Reddit table retains 133 GOOGL posts from late 2025/early 2026. The Reddit payload
   finding was resolved on 2026-07-17 by removing obsolete engagement filtering and
   rebuilding every Reddit output. The indicator finding was resolved the same day with
-  five years of calculation warm-up and a complete replay refresh; the remaining findings
+  five years of calculation warm-up and a complete replay refresh. The fundamentals
+  finding was resolved the same day with SEC-backed point-in-time payloads; the remaining findings
   still block readiness.
 - Observation: The original TradingAgents repository works around Reddit JSON
   blocking by using Reddit RSS/Atom search first.
@@ -608,6 +609,20 @@ SHA-256 `6b7d21158488f67a6927c943969e50ac3a848a5c8362e28b262a11b62c3121e6`.
 Focused validation reported 76 passed and the full suite reported 194 passed. This
 semantic correction does not resolve the separate point-in-time snapshot finding.
 
+Milestone 14 — SEC point-in-time fundamentals (2026-07-17). The `get_fundamentals`
+dataset builder now uses a local SEC archive instead of Yahoo's latest `.info`
+snapshot. `ensure_sec_archive()` loads `SEC_UA` from `.env`, downloads SEC ticker,
+submissions, companyfacts, and required 10-K/10-Q filing-package files into
+`data/raw-backtest/SEC`, and validates a SHA-256/size manifest before archive reuse.
+`render_point_in_time_fundamentals()` selects only the latest filing with
+`filing_date < trade_date`, uses only the latest stored close before the trade date,
+and omits fields that cannot be reconstructed safely from the archive. The refresh
+atomically replaced all 183 fundamentals rows. The audit found 61 rows each for AAPL,
+GOOGL, and AMZN, 183 distinct payloads, zero stale Yahoo snapshot markers, and zero
+source-date violations. The SEC archive has 49 manifest entries and 50 files including
+the manifest. Focused validation reported 41 passed; the full suite reported
+201 passed.
+
 
 ## Context and Orientation
 
@@ -681,7 +696,7 @@ Definitions used in this plan:
 Audited against the backtest window, queried from 2026:
 
 - Prices and indicators are fully available historically through yfinance. Stock-price payloads use the requested range. Indicator payloads require five years of pre-window OHLCV so long-window and recursive calculations are initialized before the first displayed row; the builder downloads one reusable history per ticker and renders only the analyst lookback window for each trade date.
-- Financial statements return real filings but yfinance keeps only ~4 recent periods, so some 2023-2024 quarters may have rolled off; `get_fundamentals` (`.info`) is a current snapshot, not point-in-time. The builder records best-effort current values; SEC EDGAR is noted as a future point-in-time upgrade. This is acceptable because the profile and statement fields are slow-moving context, and the dominant CR drivers are price action and the daily decisions.
+- `get_fundamentals` is now built from an archived SEC EDGAR source under `data/raw-backtest/SEC`, with filing and prior-close dates strictly before each replay date. The financial-statement tools still use yfinance latest statement snapshots; those rows remain point-in-time unsafe until they are rebuilt from SEC filings or removed from the replay dataset.
 - News (`get_news`, `get_global_news`) is **not** historically queryable through the
   existing tools, so the builder sources it from **Exa** with published-date filters.
   Reddit and StockTwits are read from their checked-in historical archives instead.
@@ -1034,8 +1049,8 @@ Representative evaluation report (illustrative):
     GOOGL  first Overweight 2024-01-11 @ 142.30 | V_start=284.60 | CR = +9.1%
     AMZN   first Buy 2024-01-05 @ 145.24 | V_start=145.24 | CR = +12.7%
 
-Known limitations to keep in mind: fundamentals and yfinance financial statements are
-best-effort latest snapshots, not point-in-time daily history; the trading-day count is
+Known limitations to keep in mind: yfinance financial statements are still best-effort
+latest snapshots, not point-in-time daily history; the trading-day count is
 derived from the actual price calendar and equals the README's 61 (2024-01-02 ..
 2024-03-28, with 2024-03-29 a closed holiday); and the full run is
 language-model-expensive (3 × 61 = 183 flow
@@ -1198,4 +1213,12 @@ remaining dataset-readiness findings are unchanged.
 Revision Note: 2026-07-17 Normalized dividend-yield fallback units and atomically
 replaced the 61 AMZN fundamentals payloads. Yahoo's explicit trailing zero now renders
 as `Dividend yield: 0` rather than `Missing fields: Dividend yield`; all unrelated tool
-outputs remained unchanged. Point-in-time-unsafe fundamentals remain pending.
+outputs remained unchanged. This was later superseded by the SEC point-in-time
+fundamentals refresh.
+
+Revision Note: 2026-07-17 Replaced all 183 `get_fundamentals` rows with SEC-backed
+point-in-time fundamentals and archived the required filings under
+`data/raw-backtest/SEC`. The refreshed fundamentals rows use only filings and closes
+strictly before each replay date, all stale Yahoo snapshot markers are gone, and the
+full suite reports 201 passed. Point-in-time-unsafe yfinance statement rows remain
+pending.
