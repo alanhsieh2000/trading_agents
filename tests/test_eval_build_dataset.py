@@ -643,10 +643,16 @@ def test_build_reddit_outputs_stores_all_posts_but_limits_replay_payload(
     assert "googl" in googl_payload
 
 
-def _stocktwits_payload(ticker: str, messages: list[dict]) -> dict:
+def _stocktwits_payload(
+    ticker: str,
+    messages: list[dict],
+    *,
+    since: int = 3,
+    max_id: int = 1,
+) -> dict:
     return {
         "symbol": {"symbol": ticker},
-        "cursor": {"more": True, "since": 3, "max": 1},
+        "cursor": {"more": True, "since": since, "max": max_id},
         "messages": messages,
     }
 
@@ -674,16 +680,20 @@ def test_load_stocktwits_messages_dedupes_and_sorts_descending(tmp_path):
     first = _stocktwits_payload(
         "AAPL",
         [
-            _stocktwits_message(1, "2026-01-02T12:00:00Z", "older"),
             _stocktwits_message(2, "2026-01-03T12:00:00Z", "newer", "bull", "Bullish"),
+            _stocktwits_message(1, "2026-01-02T12:00:00Z", "older"),
         ],
+        since=3,
+        max_id=2,
     )
     second = _stocktwits_payload(
         "AAPL",
         [
-            _stocktwits_message(2, "2026-01-03T12:00:00Z", "duplicate"),
+            _stocktwits_message(2, "2026-01-03T12:00:00Z", "newer", "bull", "Bullish"),
             _stocktwits_message(3, "2026-01-01T12:00:00Z", "oldest", "bear", "Bearish"),
         ],
+        since=1,
+        max_id=0,
     )
     (raw_dir / "AAPL-0001.json").write_text(json.dumps(first))
     (raw_dir / "AAPL-0002.json").write_text(json.dumps(second))
@@ -693,6 +703,82 @@ def test_load_stocktwits_messages_dedupes_and_sorts_descending(tmp_path):
     assert [message.message_id for message in messages] == [2, 1, 3]
     assert messages[0].body == "newer"
     assert messages[0].sentiment == "Bullish"
+
+
+def test_load_stocktwits_archive_rejects_missing_message_field(tmp_path):
+    raw_dir = tmp_path / "stocktwits"
+    raw_dir.mkdir()
+    message = _stocktwits_message(2, "2024-01-03T12:00:00Z", "body")
+    del message["body"]
+    (raw_dir / "AAPL-0001.json").write_text(
+        json.dumps(_stocktwits_payload("AAPL", [message]))
+    )
+
+    with pytest.raises(ValueError, match="missing required fields body"):
+        build_dataset.load_stocktwits_archive(raw_dir, ["AAPL"])
+
+
+def test_load_stocktwits_archive_rejects_noncontiguous_numeric_sequence(tmp_path):
+    raw_dir = tmp_path / "stocktwits"
+    raw_dir.mkdir()
+    first = _stocktwits_payload(
+        "AAPL",
+        [_stocktwits_message(3, "2024-01-03T12:00:00Z", "new")],
+        since=4,
+        max_id=3,
+    )
+    third = _stocktwits_payload(
+        "AAPL",
+        [_stocktwits_message(1, "2024-01-01T12:00:00Z", "old")],
+        since=2,
+        max_id=1,
+    )
+    (raw_dir / "AAPL-0001.json").write_text(json.dumps(first))
+    (raw_dir / "AAPL-0003.json").write_text(json.dumps(third))
+
+    with pytest.raises(ValueError, match=r"missing pages: \[2\]"):
+        build_dataset.load_stocktwits_archive(raw_dir, ["AAPL"])
+
+
+def test_load_stocktwits_archive_rejects_conflicting_duplicate(tmp_path):
+    raw_dir = tmp_path / "stocktwits"
+    raw_dir.mkdir()
+    first = _stocktwits_payload(
+        "AAPL",
+        [_stocktwits_message(2, "2024-01-03T12:00:00Z", "original")],
+        since=3,
+        max_id=2,
+    )
+    second = _stocktwits_payload(
+        "AAPL",
+        [_stocktwits_message(2, "2024-01-03T12:00:00Z", "changed")],
+        since=1,
+        max_id=0,
+    )
+    (raw_dir / "AAPL-0001.json").write_text(json.dumps(first))
+    (raw_dir / "AAPL-0002.json").write_text(json.dumps(second))
+
+    with pytest.raises(ValueError, match="Conflicting duplicate StockTwits message 2"):
+        build_dataset.load_stocktwits_archive(raw_dir, ["AAPL"])
+
+
+def test_validate_stocktwits_coverage_rejects_short_archive(tmp_path):
+    raw_dir = tmp_path / "stocktwits"
+    raw_dir.mkdir()
+    payload = _stocktwits_payload(
+        "AAPL",
+        [
+            _stocktwits_message(2, "2024-01-03T12:00:00Z", "new"),
+            _stocktwits_message(1, "2024-01-01T12:00:00Z", "old"),
+        ],
+    )
+    (raw_dir / "AAPL-0001.json").write_text(json.dumps(payload))
+    archive = build_dataset.load_stocktwits_archive(raw_dir, ["AAPL"])
+
+    with pytest.raises(ValueError, match="Insufficient StockTwits archive coverage"):
+        build_dataset.validate_stocktwits_coverage(
+            archive, ["AAPL"], ["2024-01-02", "2024-01-05"], lookback_days=7
+        )
 
 
 def test_render_stocktwits_payload_matches_live_helper_shape():
@@ -777,6 +863,48 @@ def test_build_stocktwits_outputs_writes_lookback_payloads_from_raw_json(tmp_pat
     assert first_payload == "No data available for StockTwits messages for AAPL."
     assert "inside" in second_payload
     assert "outside" not in second_payload
+
+
+def test_build_stocktwits_outputs_validates_before_writing(tmp_path):
+    raw_dir = tmp_path / "stocktwits"
+    raw_dir.mkdir()
+    payload = _stocktwits_payload(
+        "AAPL",
+        [_stocktwits_message(1, "2024-01-03T12:00:00Z", "too short")],
+    )
+    (raw_dir / "AAPL-0001.json").write_text(json.dumps(payload))
+    options = build_dataset.BuildDatasetOptions(
+        dataset_path=str(tmp_path / "eval.duckdb"),
+        tickers=("AAPL",),
+        benchmark="SPY",
+        start_date="2024-01-02",
+        end_date="2024-01-05",
+        buffer_start_date="2023-12-01",
+        price_tail_days=2,
+        lookback_days=7,
+        weight_over=0.5,
+        weight_under=0.5,
+        limit_days=None,
+        verify_only=False,
+    )
+
+    with EvalDataset(options.dataset_path) as dataset:
+        dataset.put_tool_output(
+            "fetch_stocktwits_messages", "AAPL", "2024-01-02", "old"
+        )
+        with pytest.raises(ValueError, match="Insufficient StockTwits"):
+            build_dataset.build_stocktwits_outputs(
+                options,
+                dataset,
+                ["2024-01-02", "2024-01-05"],
+                raw_dir=raw_dir,
+            )
+        assert (
+            dataset.tool_output(
+                "fetch_stocktwits_messages", "AAPL", "2024-01-02"
+            )
+            == "old"
+        )
 
 
 def test_build_fundamentals_outputs_writes_tickers_only_and_reuses_snapshot(
@@ -999,7 +1127,22 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
         ),
     )
     monkeypatch.setattr(build_dataset, "fetch_reddit_posts_for_dataset", lambda **_: [])
-    monkeypatch.setattr(build_dataset, "load_stocktwits_messages", lambda *_args, **_: [])
+    monkeypatch.setattr(
+        build_dataset,
+        "load_stocktwits_archive",
+        lambda _raw_dir, tickers, **_: build_dataset.StockTwitsArchive(
+            messages_by_symbol={ticker: () for ticker in tickers},
+            pages_by_symbol={ticker: 1 for ticker in tickers},
+            duplicates_by_symbol={ticker: 0 for ticker in tickers},
+            date_range_by_symbol={
+                ticker: (
+                    datetime.fromisoformat("2025-12-01T00:00:00+00:00").date(),
+                    datetime.fromisoformat("2026-03-31T00:00:00+00:00").date(),
+                )
+                for ticker in tickers
+            },
+        ),
+    )
     monkeypatch.setattr(
         build_dataset,
         "get_fundamentals_text",

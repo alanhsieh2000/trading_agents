@@ -9,6 +9,7 @@ backtest mechanics remain comparable.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import time
 from collections.abc import Callable
@@ -121,6 +122,21 @@ class StocktwitsMessage:
 
 
 @dataclass(frozen=True)
+class StockTwitsArchive:
+    messages_by_symbol: dict[str, tuple[StocktwitsMessage, ...]]
+    pages_by_symbol: dict[str, int]
+    duplicates_by_symbol: dict[str, int]
+    date_range_by_symbol: dict[str, tuple[date, date]]
+
+
+@dataclass(frozen=True)
+class StocktwitsBuildResult(ToolOutputBuildResult):
+    messages_by_symbol: dict[str, int]
+    pages_by_symbol: dict[str, int]
+    duplicates_by_symbol: dict[str, int]
+
+
+@dataclass(frozen=True)
 class DatasetBuildResult:
     price_result: PriceBuildResult
     stock_data_result: ToolOutputBuildResult
@@ -128,7 +144,7 @@ class DatasetBuildResult:
     news_result: ToolOutputBuildResult
     global_news_result: ToolOutputBuildResult
     reddit_result: RedditBuildResult
-    stocktwits_result: ToolOutputBuildResult
+    stocktwits_result: StocktwitsBuildResult
     fundamentals_result: ToolOutputBuildResult
     balance_sheet_result: ToolOutputBuildResult
     cashflow_result: ToolOutputBuildResult
@@ -681,22 +697,172 @@ def build_reddit_outputs(
 def load_stocktwits_messages(
     ticker: str, raw_dir: Path = STOCKTWITS_RAW_DIR
 ) -> list[StocktwitsMessage]:
-    """Load and dedupe raw StockTwits messages collected by the coverage scanner."""
+    """Load one ticker through the strict offline archive parser."""
     symbol = ticker.upper().strip()
-    messages_by_id: dict[int, StocktwitsMessage] = {}
-    for path in sorted(raw_dir.glob(f"{symbol}-*.json")):
-        payload = json.loads(path.read_text())
-        raw_messages = payload.get("messages") if isinstance(payload, dict) else []
-        for raw_message in raw_messages or []:
-            if not isinstance(raw_message, dict):
-                continue
-            message = _stocktwits_message_from_raw(symbol, raw_message)
-            if message is None:
-                continue
-            messages_by_id.setdefault(message.message_id, message)
-    return sorted(
-        messages_by_id.values(), key=lambda message: message.created_at, reverse=True
+    archive = load_stocktwits_archive(raw_dir, (symbol,))
+    return list(archive.messages_by_symbol[symbol])
+
+
+def load_stocktwits_archive(
+    raw_dir: Path,
+    tickers: Sequence[str],
+    *,
+    retain_start_date: date | None = None,
+    retain_end_date: date | None = None,
+) -> StockTwitsArchive:
+    """Validate StockTwits pagination pages and retain deduplicated messages."""
+    symbols = tuple(dict.fromkeys(ticker.upper().strip() for ticker in tickers))
+    if not raw_dir.is_dir():
+        raise ValueError(f"StockTwits archive directory not found: {raw_dir}")
+
+    messages_by_symbol: dict[str, tuple[StocktwitsMessage, ...]] = {}
+    pages_by_symbol: dict[str, int] = {}
+    duplicates_by_symbol: dict[str, int] = {}
+    date_range_by_symbol: dict[str, tuple[date, date]] = {}
+
+    for symbol in symbols:
+        paths_by_sequence: dict[int, Path] = {}
+        for path in raw_dir.glob(f"{symbol}-*.json"):
+            sequence_text = path.stem[len(symbol) + 1 :]
+            if not sequence_text.isdigit() or int(sequence_text) < 1:
+                raise ValueError(f"Malformed StockTwits archive filename: {path}")
+            sequence = int(sequence_text)
+            if sequence in paths_by_sequence:
+                raise ValueError(
+                    f"Ambiguous StockTwits page sequence {symbol}-{sequence}: "
+                    f"{paths_by_sequence[sequence]} and {path}"
+                )
+            paths_by_sequence[sequence] = path
+
+        if not paths_by_sequence:
+            raise ValueError(f"StockTwits archive has no pages for {symbol}")
+        sequences = sorted(paths_by_sequence)
+        expected_sequences = list(range(1, sequences[-1] + 1))
+        if sequences != expected_sequences:
+            missing = sorted(set(expected_sequences) - set(sequences))
+            raise ValueError(
+                f"Non-contiguous StockTwits page sequence for {symbol}; "
+                f"missing pages: {missing[:10]}"
+            )
+
+        retained_by_id: dict[int, StocktwitsMessage] = {}
+        fingerprints_by_id: dict[int, bytes] = {}
+        duplicate_count = 0
+        oldest: date | None = None
+        newest: date | None = None
+        previous_cursor_max: int | None = None
+        previous_newest_at: datetime | None = None
+
+        for sequence in sequences:
+            path = paths_by_sequence[sequence]
+            try:
+                payload = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError(f"Malformed StockTwits JSON page {path}: {exc}") from exc
+            raw_messages, cursor = _validate_stocktwits_page(payload, symbol, path)
+
+            cursor_since = cursor["since"]
+            cursor_max = cursor["max"]
+            if cursor_since <= cursor_max:
+                raise ValueError(
+                    f"Invalid StockTwits cursor bounds in {path}: "
+                    f"since={cursor_since}, max={cursor_max}"
+                )
+            if previous_cursor_max is not None and cursor_since >= previous_cursor_max:
+                raise ValueError(
+                    f"Non-monotonic StockTwits cursor at {path}: since={cursor_since} "
+                    f"must be below previous max={previous_cursor_max}"
+                )
+            previous_cursor_max = cursor_max
+
+            page_messages = [
+                _validated_stocktwits_message(symbol, raw, path=path, index=index)
+                for index, raw in enumerate(raw_messages)
+            ]
+            page_messages.sort(
+                key=lambda message: (message.created_at, message.message_id),
+                reverse=True,
+            )
+            created_values = [message.created_at for message in page_messages]
+            page_newest_at = created_values[0]
+            if previous_newest_at is not None and page_newest_at > previous_newest_at:
+                raise ValueError(
+                    f"Ambiguous StockTwits page chronology at {path}: newest message "
+                    f"{page_newest_at.isoformat()} is after previous page's newest "
+                    f"{previous_newest_at.isoformat()}"
+                )
+            previous_newest_at = page_newest_at
+
+            for message in page_messages:
+                message_date = message.created_at.date()
+                oldest = message_date if oldest is None or message_date < oldest else oldest
+                newest = message_date if newest is None or message_date > newest else newest
+                fingerprint = _stocktwits_message_fingerprint(message)
+                previous_fingerprint = fingerprints_by_id.get(message.message_id)
+                if previous_fingerprint is not None:
+                    duplicate_count += 1
+                    if previous_fingerprint != fingerprint:
+                        raise ValueError(
+                            f"Conflicting duplicate StockTwits message "
+                            f"{message.message_id} in {path}"
+                        )
+                    continue
+                fingerprints_by_id[message.message_id] = fingerprint
+                if (
+                    (retain_start_date is None or message_date >= retain_start_date)
+                    and (retain_end_date is None or message_date <= retain_end_date)
+                ):
+                    retained_by_id[message.message_id] = message
+
+        if oldest is None or newest is None:
+            raise ValueError(f"StockTwits archive pages for {symbol} contain no messages")
+        messages_by_symbol[symbol] = tuple(
+            sorted(
+                retained_by_id.values(),
+                key=lambda message: (message.created_at, message.message_id),
+                reverse=True,
+            )
+        )
+        pages_by_symbol[symbol] = len(sequences)
+        duplicates_by_symbol[symbol] = duplicate_count
+        date_range_by_symbol[symbol] = (oldest, newest)
+
+    return StockTwitsArchive(
+        messages_by_symbol=messages_by_symbol,
+        pages_by_symbol=pages_by_symbol,
+        duplicates_by_symbol=duplicates_by_symbol,
+        date_range_by_symbol=date_range_by_symbol,
     )
+
+
+def validate_stocktwits_coverage(
+    archive: StockTwitsArchive,
+    tickers: Sequence[str],
+    trade_dates: Sequence[str],
+    *,
+    lookback_days: int,
+) -> None:
+    """Require each archive to span the requested replay and lookback dates."""
+    if not trade_dates:
+        raise ValueError("Cannot validate StockTwits coverage without trade dates")
+    required_start = min(_parse_date(value) for value in trade_dates) - timedelta(
+        days=lookback_days
+    )
+    required_end = max(_parse_date(value) for value in trade_dates)
+    failures = []
+    for symbol in dict.fromkeys(ticker.upper().strip() for ticker in tickers):
+        date_range = archive.date_range_by_symbol.get(symbol)
+        if date_range is None:
+            failures.append(f"{symbol}: no archive range")
+            continue
+        oldest, newest = date_range
+        if oldest > required_start or newest < required_end:
+            failures.append(
+                f"{symbol}: archive spans {oldest}..{newest}, required "
+                f"{required_start}..{required_end}"
+            )
+    if failures:
+        raise ValueError("Insufficient StockTwits archive coverage: " + "; ".join(failures))
 
 
 def render_stocktwits_payload(
@@ -756,14 +922,32 @@ def build_stocktwits_outputs(
     transaction_days: Sequence[str],
     *,
     raw_dir: Path = STOCKTWITS_RAW_DIR,
-) -> ToolOutputBuildResult:
+) -> StocktwitsBuildResult:
     """Record replayable ``fetch_stocktwits_messages`` payloads from raw JSON files."""
     settings = get_settings()
     symbols = _symbols_for_indicator_outputs(options)
     payloads_written = 0
+    if not transaction_days:
+        raise ValueError("Cannot build StockTwits outputs without transaction days")
+    retain_start_date = min(_parse_date(value) for value in transaction_days) - timedelta(
+        days=options.lookback_days
+    )
+    retain_end_date = max(_parse_date(value) for value in transaction_days)
+    archive = load_stocktwits_archive(
+        raw_dir,
+        symbols,
+        retain_start_date=retain_start_date,
+        retain_end_date=retain_end_date,
+    )
+    validate_stocktwits_coverage(
+        archive,
+        symbols,
+        transaction_days,
+        lookback_days=options.lookback_days,
+    )
 
     for symbol in symbols:
-        messages = load_stocktwits_messages(symbol, raw_dir=raw_dir)
+        messages = archive.messages_by_symbol[symbol]
         for as_of_date in transaction_days:
             payload = render_stocktwits_payload(
                 symbol,
@@ -777,12 +961,17 @@ def build_stocktwits_outputs(
             )
             payloads_written += 1
 
-    return ToolOutputBuildResult(
+    return StocktwitsBuildResult(
         tool_name="fetch_stocktwits_messages",
         symbols=symbols,
         payloads_written=payloads_written,
         transaction_days=tuple(transaction_days),
         lookback_days=options.lookback_days,
+        messages_by_symbol={
+            symbol: len(archive.messages_by_symbol[symbol]) for symbol in symbols
+        },
+        pages_by_symbol=archive.pages_by_symbol,
+        duplicates_by_symbol=archive.duplicates_by_symbol,
     )
 
 
@@ -1058,29 +1247,108 @@ def _trim_text(value: str, max_length: int) -> str:
     return value[:max_length] + "..."
 
 
-def _stocktwits_message_from_raw(
-    ticker: str, raw_message: dict[str, object]
-) -> StocktwitsMessage | None:
-    message_id = _as_optional_int(raw_message.get("id"))
-    created_at = _parse_stocktwits_datetime(raw_message.get("created_at"))
-    if message_id is None or created_at is None:
-        return None
-    entities = raw_message.get("entities") or {}
-    sentiment_obj = entities.get("sentiment") if isinstance(entities, dict) else {}
-    sentiment_obj = sentiment_obj or {}
-    sentiment = (
-        sentiment_obj.get("basic") if isinstance(sentiment_obj, dict) else None
-    )
-    user = raw_message.get("user") or {}
-    username = user.get("username", "?") if isinstance(user, dict) else "?"
+def _validate_stocktwits_page(
+    payload: object, symbol: str, path: Path
+) -> tuple[list[object], dict[str, object]]:
+    if not isinstance(payload, dict):
+        raise ValueError(f"Malformed StockTwits page {path}: expected object")
+    raw_symbol = payload.get("symbol")
+    if not isinstance(raw_symbol, dict) or raw_symbol.get("symbol") != symbol:
+        raise ValueError(
+            f"Malformed StockTwits page {path}: symbol does not match {symbol}"
+        )
+    raw_messages = payload.get("messages")
+    if not isinstance(raw_messages, list) or not raw_messages:
+        raise ValueError(
+            f"Malformed StockTwits page {path}: expected a non-empty messages list"
+        )
+    cursor = payload.get("cursor")
+    if not isinstance(cursor, dict):
+        raise ValueError(f"Malformed StockTwits page {path}: expected cursor object")
+    if not isinstance(cursor.get("more"), bool):
+        raise ValueError(f"Malformed StockTwits cursor in {path}: invalid more")
+    for field_name in ("since", "max"):
+        value = cursor.get(field_name)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(
+                f"Malformed StockTwits cursor in {path}: invalid {field_name}"
+            )
+    return raw_messages, cursor
+
+
+def _validated_stocktwits_message(
+    ticker: str,
+    raw_message: object,
+    *,
+    path: Path,
+    index: int,
+) -> StocktwitsMessage:
+    location = f"{path} messages[{index}]"
+    if not isinstance(raw_message, dict):
+        raise ValueError(f"Malformed StockTwits message at {location}: expected object")
+    required = ("id", "created_at", "body", "user", "entities")
+    missing = [
+        key for key in required if key not in raw_message or raw_message[key] is None
+    ]
+    if missing:
+        raise ValueError(
+            f"Malformed StockTwits message at {location}: missing required fields "
+            + ", ".join(missing)
+        )
+
+    message_id = raw_message["id"]
+    if isinstance(message_id, bool) or not isinstance(message_id, int):
+        raise ValueError(f"Malformed StockTwits message at {location}: invalid id")
+    created_at = _parse_stocktwits_datetime(raw_message["created_at"])
+    if created_at is None:
+        raise ValueError(
+            f"Malformed StockTwits message at {location}: invalid created_at"
+        )
+    body = raw_message["body"]
+    if not isinstance(body, str):
+        raise ValueError(f"Malformed StockTwits message at {location}: invalid body")
+    user = raw_message["user"]
+    if not isinstance(user, dict) or not isinstance(user.get("username"), str):
+        raise ValueError(f"Malformed StockTwits message at {location}: invalid user")
+    entities = raw_message["entities"]
+    if not isinstance(entities, dict):
+        raise ValueError(f"Malformed StockTwits message at {location}: invalid entities")
+    sentiment_obj = entities.get("sentiment")
+    sentiment: str | None = None
+    if sentiment_obj is not None:
+        if not isinstance(sentiment_obj, dict):
+            raise ValueError(
+                f"Malformed StockTwits message at {location}: invalid sentiment"
+            )
+        raw_sentiment = sentiment_obj.get("basic")
+        if raw_sentiment not in (None, "Bullish", "Bearish"):
+            raise ValueError(
+                f"Malformed StockTwits message at {location}: invalid sentiment"
+            )
+        sentiment = raw_sentiment
+
     return StocktwitsMessage(
         ticker=ticker,
         message_id=message_id,
         created_at=created_at,
-        body=str(raw_message.get("body", "")),
-        username=str(username or "?"),
-        sentiment=str(sentiment) if sentiment else None,
+        body=body,
+        username=user["username"],
+        sentiment=sentiment,
     )
+
+
+def _stocktwits_message_fingerprint(message: StocktwitsMessage) -> bytes:
+    normalized = json.dumps(
+        (
+            message.created_at.isoformat(),
+            message.body,
+            message.username,
+            message.sentiment,
+        ),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.blake2b(normalized, digest_size=16).digest()
 
 
 def _parse_stocktwits_datetime(value: object) -> datetime | None:
@@ -1106,13 +1374,6 @@ def _trim_stocktwits_text(value: str, max_length: int) -> str:
     if max_length <= 1:
         return value[:max_length]
     return value[:max_length] + "…"
-
-
-def _as_optional_int(value: object) -> int | None:
-    try:
-        return int(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
 
 
 def build_dataset(options: BuildDatasetOptions) -> DatasetBuildResult:
@@ -1221,6 +1482,25 @@ def render_reddit_result(result: RedditBuildResult) -> str:
     return "\n".join(lines)
 
 
+def render_stocktwits_result(result: StocktwitsBuildResult) -> str:
+    lines = [
+        f"{result.tool_name} outputs built",
+        "source: stocktwits-archive",
+        f"symbols: {', '.join(result.symbols)}",
+        f"payloads_written: {result.payloads_written}",
+        f"transaction_days: {len(result.transaction_days)}",
+        f"lookback_days: {result.lookback_days}",
+        "archive:",
+    ]
+    lines.extend(
+        f"  {symbol}: pages={result.pages_by_symbol[symbol]} "
+        f"messages={result.messages_by_symbol[symbol]} "
+        f"duplicates={result.duplicates_by_symbol[symbol]}"
+        for symbol in result.symbols
+    )
+    return "\n".join(lines)
+
+
 def render_dataset_result(result: DatasetBuildResult) -> str:
     return "\n".join(
         [
@@ -1230,7 +1510,7 @@ def render_dataset_result(result: DatasetBuildResult) -> str:
             render_tool_output_result(result.news_result),
             render_tool_output_result(result.global_news_result),
             render_reddit_result(result.reddit_result),
-            render_tool_output_result(result.stocktwits_result),
+            render_stocktwits_result(result.stocktwits_result),
             render_tool_output_result(result.fundamentals_result),
             render_tool_output_result(result.balance_sheet_result),
             render_tool_output_result(result.cashflow_result),

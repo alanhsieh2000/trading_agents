@@ -42,14 +42,14 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [x] (2026-06-11) Added `EvaluationSettings` to `src/trading_agents/config/settings.py`, wired it into `AppSettings`, and exported it from `config/__init__.py`.
 - [x] (2026-06-12 05:55Z) Added `exa-py` usage and an `EXA_API_KEY` requirement; created `src/trading_agents/evaluation/exa_sources.py` with historical news, global-news, Reddit, and StockTwits helpers plus unit tests.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/dataset.py` (DuckDB-backed `EvalDataset`, `tool_outputs` + `prices` tables, idempotent upserts).
-- [ ] (pending) Create the `build-eval-dataset` entry point in `src/trading_agents/evaluation/build_dataset.py`. The historical social-source gates are open: the checked-in Arctic Shift and StockTwits archives under `data/raw-backtest/` are the canonical evaluation inputs, so the builder must validate and ingest both without making live Reddit, StockTwits, Exa, or Arctic Shift requests for social sentiment.
+- [x] (2026-07-17 08:02Z) Completed the `build-eval-dataset` entry point in `src/trading_agents/evaluation/build_dataset.py`, including offline validation and ingestion of both canonical social archives under `data/raw-backtest/`. Canonical social preparation makes no Reddit, StockTwits, Exa, or Arctic Shift requests; Plan B retains its separate live Reddit RSS behavior.
 - [x] (2026-06-17 00:00Z) Implemented the shared price-table and trading-day calendar build in `build_dataset.py`: write close prices for the selected evaluation tickers and the default benchmark ticker, SPY, before recording per-tool payloads.
 - [x] (2026-06-17 06:37Z) Implemented and populated shared dataset building for `get_stock_data`: recorded the market-data text block for each evaluation ticker and for SPY on each trading day using the same lookback window the analyst stage will request; SPY history is required by the portfolio manager's self-reflection and benchmark-relative realized-return calculations. Wrote 244 persistent `get_stock_data` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, SPY 61.
 - [x] (2026-06-17) Implemented and populated dataset building for `get_indicators`: records all allowed indicators from `src/trading_agents/tools/market_data.py` for each configured ticker and trading day using the analyst-stage lookback window. Wrote 183 persistent `get_indicators` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero SPY indicator rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison matched for `AMZN` on `2024-02-27` with 12 indicators.
 - [x] (2026-06-17 13:03Z) Implemented and populated shared dataset building for `get_news`: records ticker-news text through the Exa historical source layer with the same markdown/no-news/error contract as the live Yahoo-backed tool. The builder uses a doubled news limit (`settings.news.ticker_limit * 2`, currently 40) for buffer coverage, writes ticker rows only, and shares the same implementation with Plan B. Wrote 183 persistent `get_news` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AMZN on `2024-03-05`; the evaluation-backed `get_news` tool matched the DuckDB payload exactly and returned 39 articles for `2024-02-27..2024-03-05`.
 - [x] (2026-06-17) Implemented and populated shared dataset building for `get_global_news`: records one Exa historical global-market-news payload per trading day, stores it under each evaluated ticker key for existing dataset-backed tool replay, and uses a doubled global-news limit (`settings.news.global_limit * 2`, currently 20). Wrote 183 persistent `get_global_news` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-21`; the evaluation-backed `get_global_news` tool matched the DuckDB payload exactly and returned the shared global payload for all ticker keys on that date.
 - [x] (2026-07-17 07:40Z) Implemented canonical dataset building for `fetch_reddit_posts`: validates all retained Arctic Shift pages and required fields, requires every configured ticker/subreddit stream and full replay-window coverage, deduplicates by ticker/post ID, applies the live sentiment quality thresholds, and renders rich date/score/comment/title/body payloads without network calls. Extended raw Reddit rows to retain source IDs and engagement counts. Ingested 1,051 unique posts and 183 tool payloads into `data/eval_dataset.duckdb` (61 each for AAPL, GOOGL, and AMZN); 177 payloads contain rich posts and 6 are valid no-data windows. Focused tests reported 37 passed.
-- [ ] (pending) Implement dataset building for `fetch_stocktwits_messages`: parse, validate, chronologically order, deduplicate, and render the committed StockTwits JSON archive into the existing sentiment text format for every ticker/trading day. Validate archive completeness and required fields before writing; fail clearly for malformed input or missing ticker/date coverage. Do not call the live StockTwits or Exa APIs during this build.
+- [x] (2026-07-17 08:02Z) Implemented canonical dataset building for `fetch_stocktwits_messages`: validates all 21,165 retained pagination pages, their numeric filename sequence, symbol/cursor/message schemas, decreasing cursor bounds, page chronology, duplicate consistency, and full replay-window coverage before writes. Messages are chronologically normalized and rendered in the live sentiment format without StockTwits or Exa calls. Populated 183 payloads in `data/eval_dataset.duckdb` (61 per ticker); every payload contains the configured 30 messages. Focused validation reported 69 passed.
 - [x] Implement dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
 - [x] (2026-06-18 14:16Z) Implemented and populated shared dataset building for `get_balance_sheet`: records the yfinance latest balance-sheet statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_balance_sheet` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-08`; the evaluation-backed `get_balance_sheet` tool matched the live tool exactly and AAPL had one distinct payload across all 61 replay dates.
 - [x] (2026-06-18 14:24Z) Implemented and populated shared dataset building for `get_cashflow`: records the yfinance latest cash flow statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_cashflow` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-01-12`; the evaluation-backed `get_cashflow` tool matched the live tool exactly and each ticker had one distinct payload across all 61 replay dates.
@@ -93,6 +93,18 @@ future contributor can gauge the rate of progress.
   GOOGL, and AMZN; the archive contains 21,165 JSON pages (AAPL 10,983, GOOGL 3,562,
   AMZN 6,620). The scanner's numeric filename-ordering fix handles the AAPL archive's
   five-digit sequence numbers.
+- Observation (2026-07-17): StockTwits pagination is chronologically monotonic at the
+  page level, but individual provider pages are not guaranteed to order every message.
+  Evidence: strict validation found an internal timestamp inversion in
+  `AMZN-0974.json`; all 21,165 pages still had decreasing cursor bounds and non-increasing
+  newest-page timestamps. The loader now sorts messages within pages before global
+  deduplication and rendering rather than rejecting a valid provider response.
+- Observation (2026-07-17): The retained StockTwits archive is complete for the
+  canonical replay window and contains no duplicate message IDs.
+  Evidence: validation accepted contiguous numeric sequences AAPL `1..10983`, GOOGL
+  `1..3562`, and AMZN `1..6620`, each spanning 2023-12-17 through at least 2026-07-13.
+  The bounded canonical render retained 43,743 AAPL, 9,090 GOOGL, and 15,926 AMZN
+  messages from the required lookback/replay range and produced 183 full payloads.
 - Observation: The original TradingAgents repository works around Reddit JSON
   blocking by using Reddit RSS/Atom search first.
   Evidence: `https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/dataflows/reddit.py`
@@ -279,6 +291,16 @@ is ideal).
   the builder must still reject malformed pages, missing fields, or insufficient
   selected ticker/date coverage before writing DuckDB rows.
   Date/Author: 2026-07-16 / Codex
+
+- Decision: Validate StockTwits pagination order from numeric filenames, decreasing
+  cursor bounds, and non-increasing page-level newest timestamps, then explicitly sort
+  messages within each page.
+  Rationale: numeric sequencing and cursor/page bounds detect missing, reordered, or
+  ambiguous archive pages. StockTwits does not guarantee strict timestamp order inside a
+  response page, as demonstrated by `AMZN-0974.json`, so rejecting internal inversions
+  would discard valid data; deterministic sorting provides the required chronological
+  replay order.
+  Date/Author: 2026-07-17 / Codex
 
 - Decision: Track the RSS-first live Reddit fix in Plan 01, but keep Plan 07's
   historical Reddit requirement separate.
@@ -487,8 +509,19 @@ span before writing sentiment rows. Raw DuckDB rows now retain Arctic Shift post
 scores, and comment counts. The completed ingestion wrote 1,051 unique raw rows and 183
 `fetch_reddit_posts` payloads to `data/eval_dataset.duckdb`; focused builder and dataset
 tests reported 37 passed, the broader evaluation/tool suite reported 64 passed, and the
-full repository suite reported 181 passed. The next pending social-source item is offline StockTwits
-archive validation and ingestion.
+full repository suite reported 181 passed. Both canonical social-source archives are now
+validated and populated.
+
+Milestone 10 — Canonical StockTwits archive ingestion (2026-07-17). Replaced the
+lenient per-ticker reader with a structured offline archive loader that validates page
+filenames numerically, requires contiguous sequences, checks symbol/cursor/message
+schemas, verifies decreasing cursor and page-time bounds, rejects conflicting duplicate
+IDs, and proves the requested historical span before writing outputs. The loader retains
+only messages relevant to the selected replay window in memory, then globally sorts them
+for deterministic rendering. The completed ingestion validated 10,983 AAPL, 3,562 GOOGL,
+and 6,620 AMZN pages and wrote 183 full `fetch_stocktwits_messages` payloads to
+`data/eval_dataset.duckdb`. Focused builder/dataset/backtest/tool validation reported 69
+passed, and the full repository suite reported 186 passed.
 
 
 ## Context and Orientation
@@ -915,8 +948,8 @@ Representative evaluation report (illustrative):
 Known limitations to keep in mind: fundamentals and yfinance financial statements are
 best-effort latest snapshots, not point-in-time daily history; the trading-day count is
 derived from the actual price calendar and equals the README's 61 (2024-01-02 ..
-2024-03-28, with 2024-03-29 a closed holiday); StockTwits archive ingestion still needs
-to be implemented and validated; and the full run is language-model-expensive (3 × 61 = 183 flow
+2024-03-28, with 2024-03-29 a closed holiday); and the full run is
+language-model-expensive (3 × 61 = 183 flow
 runs), which is why `--limit-days` exists.
 
 
@@ -1039,3 +1072,8 @@ Revision Note: 2026-07-17 Implemented and populated canonical Arctic Shift Reddi
 ingestion. This revision records the offline validation contract, live-equivalent
 quality filtering and rich rendering, raw engagement-field preservation, focused test
 evidence, and the resulting 1,051 raw/183 replay-row dataset coverage.
+
+Revision Note: 2026-07-17 Implemented and populated canonical StockTwits archive
+ingestion. This revision records strict numeric pagination, schema/cursor/chronology and
+coverage validation, deterministic internal-page sorting, the 21,165-page validation
+evidence, and the resulting 183 full replay payloads.
