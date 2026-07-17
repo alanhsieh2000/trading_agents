@@ -48,7 +48,7 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [x] (2026-06-17) Implemented and populated dataset building for `get_indicators`: records all allowed indicators from `src/trading_agents/tools/market_data.py` for each configured ticker and trading day using the analyst-stage lookback window. Wrote 183 persistent `get_indicators` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero SPY indicator rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison matched for `AMZN` on `2024-02-27` with 12 indicators.
 - [x] (2026-06-17 13:03Z) Implemented and populated shared dataset building for `get_news`: records ticker-news text through the Exa historical source layer with the same markdown/no-news/error contract as the live Yahoo-backed tool. The builder uses a doubled news limit (`settings.news.ticker_limit * 2`, currently 40) for buffer coverage, writes ticker rows only, and shares the same implementation with Plan B. Wrote 183 persistent `get_news` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AMZN on `2024-03-05`; the evaluation-backed `get_news` tool matched the DuckDB payload exactly and returned 39 articles for `2024-02-27..2024-03-05`.
 - [x] (2026-06-17) Implemented and populated shared dataset building for `get_global_news`: records one Exa historical global-market-news payload per trading day, stores it under each evaluated ticker key for existing dataset-backed tool replay, and uses a doubled global-news limit (`settings.news.global_limit * 2`, currently 20). Wrote 183 persistent `get_global_news` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-21`; the evaluation-backed `get_global_news` tool matched the DuckDB payload exactly and returned the shared global payload for all ticker keys on that date.
-- [ ] (pending) Implement dataset building for `fetch_reddit_posts`: parse, validate, deduplicate, and render the committed Arctic Shift JSON archive into the same rich Reddit-sentiment format as `fetch_reddit_posts()` in `tools/sentiment.py`, including post date, score, comment count, title, and body excerpt. Arctic Shift supplies `score` and `num_comments`, so dataset preparation must use this archive—not Reddit RSS. Validate archive completeness and required fields before writing; fail clearly for malformed input or a missing ticker/date coverage window. Do not call the live Reddit/RSS, Exa, or Arctic Shift APIs during this build.
+- [x] (2026-07-17 07:40Z) Implemented canonical dataset building for `fetch_reddit_posts`: validates all retained Arctic Shift pages and required fields, requires every configured ticker/subreddit stream and full replay-window coverage, deduplicates by ticker/post ID, applies the live sentiment quality thresholds, and renders rich date/score/comment/title/body payloads without network calls. Extended raw Reddit rows to retain source IDs and engagement counts. Ingested 1,051 unique posts and 183 tool payloads into `data/eval_dataset.duckdb` (61 each for AAPL, GOOGL, and AMZN); 177 payloads contain rich posts and 6 are valid no-data windows. Focused tests reported 37 passed.
 - [ ] (pending) Implement dataset building for `fetch_stocktwits_messages`: parse, validate, chronologically order, deduplicate, and render the committed StockTwits JSON archive into the existing sentiment text format for every ticker/trading day. Validate archive completeness and required fields before writing; fail clearly for malformed input or missing ticker/date coverage. Do not call the live StockTwits or Exa APIs during this build.
 - [x] Implement dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
 - [x] (2026-06-18 14:16Z) Implemented and populated shared dataset building for `get_balance_sheet`: records the yfinance latest balance-sheet statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_balance_sheet` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-08`; the evaluation-backed `get_balance_sheet` tool matched the live tool exactly and AAPL had one distinct payload across all 61 replay dates.
@@ -109,6 +109,14 @@ future contributor can gauge the rate of progress.
   `src/trading_agents/tools/sentiment.py` presents post date, score, comment count,
   title, and body excerpt. Therefore the evaluation can render format-equivalent
   historical payloads from Arctic Shift without substituting Reddit RSS.
+- Observation (2026-07-17): The retained Arctic Shift archive passes offline schema,
+  stream, and replay-window coverage validation and contains 1,051 unique ticker/post
+  pairs after ID deduplication.
+  Evidence: the loader reported 62 AAPL pages with 475 posts, 84 GOOGL pages with 284
+  posts, and 64 AMZN pages with 292 posts. It validated the required 2023-12-26 through
+  2024-03-28 span for all three tickers and wrote 61 payload rows per ticker. Of the 183
+rows, 177 contain score/comment metadata and 6 are valid empty seven-day windows. The
+full repository suite reported 181 passed after ingestion.
 - Observation: `exa-py` is already a declared dependency but is unused in the
   codebase, and Exa's search API supports `start_published_date`/`end_published_date`.
   Evidence: `pyproject.toml` lists `exa-py>=2.13.0`; a repository-wide grep finds no import of it. Exa's `/search` documents published-date filters for the `news` category and for uncategorized searches.
@@ -254,6 +262,14 @@ is ideal).
   the live sentiment tool. RSS remains relevant only to the separate live-fetch repair;
   it is not a dataset-preparation fallback for this evaluation.
   Date/Author: 2026-07-16 / Codex
+
+- Decision: Apply the live Reddit tool's strict quality gates when rendering Arctic
+  Shift replay payloads and retain the unfiltered archive rows for auditability.
+  Rationale: `fetch_reddit_posts()` only presents posts whose score and comment count
+  exceed the configured minima. Matching that behavior keeps evaluation prompts
+  format- and quality-equivalent, while storing every valid deduplicated source post
+  preserves the evidence needed to inspect or rerender the dataset later.
+  Date/Author: 2026-07-17 / Codex
 
 - Decision: Treat `data/raw-backtest/stocktwits/` as an immutable, auditable input
   artifact rather than paginating StockTwits during dataset construction.
@@ -462,6 +478,17 @@ the income-statement writer in the shared builder path used by Plan 07 and Plan 
 The same income-statement payload is expected on later replay dates for a ticker because
 the live yfinance income-statement endpoint exposes the latest available income
 statement table, not a daily historical statement feed.
+
+Milestone 9 — Canonical Arctic Shift Reddit ingestion (2026-07-17). Replaced the
+canonical builder's live RSS path with an offline archive loader while retaining RSS for
+Plan B. The loader validates JSON structure, filenames, required rich post fields,
+ticker/subreddit stream presence, duplicate consistency, and the requested lookback/date
+span before writing sentiment rows. Raw DuckDB rows now retain Arctic Shift post IDs,
+scores, and comment counts. The completed ingestion wrote 1,051 unique raw rows and 183
+`fetch_reddit_posts` payloads to `data/eval_dataset.duckdb`; focused builder and dataset
+tests reported 37 passed, the broader evaluation/tool suite reported 64 passed, and the
+full repository suite reported 181 passed. The next pending social-source item is offline StockTwits
+archive validation and ingestion.
 
 
 ## Context and Orientation
@@ -888,9 +915,8 @@ Representative evaluation report (illustrative):
 Known limitations to keep in mind: fundamentals and yfinance financial statements are
 best-effort latest snapshots, not point-in-time daily history; the trading-day count is
 derived from the actual price calendar and equals the README's 61 (2024-01-02 ..
-2024-03-28, with 2024-03-29 a closed holiday); Reddit and StockTwits archive ingestion
-still needs to be implemented and validated, although historical source access is no
-longer the blocker; and the full run is language-model-expensive (3 × 61 = 183 flow
+2024-03-28, with 2024-03-29 a closed holiday); StockTwits archive ingestion still needs
+to be implemented and validated; and the full run is language-model-expensive (3 × 61 = 183 flow
 runs), which is why `--limit-days` exists.
 
 
@@ -1008,3 +1034,8 @@ sequences reaching before the Plan 07 2023-12-18 two-week-lookback cutoff. Plan 
 specifies offline validation, numeric ordering, deduplication, and rendering of this
 archive rather than Exa search or live StockTwits pagination. This changes neither live
 StockTwits behavior nor any plan implementation status.
+
+Revision Note: 2026-07-17 Implemented and populated canonical Arctic Shift Reddit
+ingestion. This revision records the offline validation contract, live-equivalent
+quality filtering and rich rendering, raw engagement-field preservation, focused test
+evidence, and the resulting 1,051 raw/183 replay-row dataset coverage.

@@ -44,6 +44,7 @@ PLAN_B_START_DATE = "2026-01-01"
 PLAN_B_END_DATE = "2026-03-31"
 PLAN_B_BUFFER_START_DATE = "2025-12-01"
 PLAN_B_DATASET_PATH = "data/eval_dataset_2026q1.duckdb"
+ARCTIC_SHIFT_RAW_DIR = Path("data/raw-backtest/arctic-shift")
 STOCKTWITS_RAW_DIR = Path("data/raw-backtest/stocktwits")
 
 
@@ -66,6 +67,7 @@ class BuildDatasetOptions:
     global_news_lookback_days: int = 7
     reddit_limit_per_sub: int = 5
     reddit_request_delay_seconds: float = 10.0
+    use_arctic_shift_reddit: bool = False
 
 
 @dataclass(frozen=True)
@@ -97,6 +99,15 @@ class RedditBuildResult:
     lookback_days: int
     payload_limit_per_sub: int
     request_delay_seconds: float
+    source: str = "reddit-rss"
+    pages_by_symbol: dict[str, int] | None = None
+
+
+@dataclass(frozen=True)
+class ArcticShiftArchive:
+    posts: tuple[RedditPost, ...]
+    pages_by_symbol: dict[str, int]
+    pages_by_stream: dict[tuple[str, str], int]
 
 
 @dataclass(frozen=True)
@@ -201,6 +212,7 @@ def options_from_settings(
                 else max(args.reddit_delay, 0.0)
             )
         ),
+        use_arctic_shift_reddit=not plan_b_defaults,
     )
 
 
@@ -485,6 +497,124 @@ def fetch_reddit_posts_for_dataset(
     return posts
 
 
+def load_arctic_shift_posts(
+    raw_dir: Path,
+    tickers: Sequence[str],
+    *,
+    subreddits: Sequence[str] | None = None,
+) -> ArcticShiftArchive:
+    """Load and validate retained Arctic Shift response pages without network I/O."""
+    symbols = tuple(dict.fromkeys(ticker.upper().strip() for ticker in tickers))
+    expected_subreddits = tuple(
+        get_settings().sentiment.reddit_subreddits
+        if subreddits is None
+        else subreddits
+    )
+    if not raw_dir.is_dir():
+        raise ValueError(f"Arctic Shift archive directory not found: {raw_dir}")
+
+    posts_by_key: dict[tuple[str, str], RedditPost] = {}
+    pages_by_symbol = {symbol: 0 for symbol in symbols}
+    pages_by_stream = {
+        (symbol, subreddit): 0
+        for symbol in symbols
+        for subreddit in expected_subreddits
+    }
+
+    for symbol in symbols:
+        for path in sorted(raw_dir.glob(f"{symbol}-*.json")):
+            suffix = path.stem[len(symbol) + 1 :]
+            try:
+                subreddit, sequence = suffix.rsplit("-", 1)
+            except ValueError as exc:
+                raise ValueError(f"Malformed Arctic Shift filename: {path}") from exc
+            if subreddit not in expected_subreddits or not sequence.isdigit():
+                raise ValueError(f"Malformed Arctic Shift filename: {path}")
+
+            try:
+                payload = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError(f"Malformed Arctic Shift JSON page {path}: {exc}") from exc
+            if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+                raise ValueError(
+                    f"Malformed Arctic Shift page {path}: expected a top-level data list"
+                )
+
+            pages_by_symbol[symbol] += 1
+            pages_by_stream[(symbol, subreddit)] += 1
+            for index, raw_post in enumerate(payload["data"]):
+                post = _arctic_shift_post_from_raw(
+                    symbol, subreddit, raw_post, path=path, index=index
+                )
+                key = (symbol, post.source_post_id or "")
+                previous = posts_by_key.get(key)
+                if previous is not None and previous != post:
+                    raise ValueError(
+                        f"Conflicting duplicate Reddit post {post.source_post_id!r} "
+                        f"in Arctic Shift archive for {symbol}"
+                    )
+                posts_by_key[key] = post
+
+    missing_streams = [
+        f"{symbol}/{subreddit}"
+        for (symbol, subreddit), count in pages_by_stream.items()
+        if count == 0
+    ]
+    if missing_streams:
+        raise ValueError(
+            "Arctic Shift archive is missing ticker/subreddit pages: "
+            + ", ".join(missing_streams)
+        )
+
+    posts = tuple(
+        sorted(
+            posts_by_key.values(),
+            key=lambda post: (post.ticker, post.published_at, post.source_post_id or ""),
+        )
+    )
+    return ArcticShiftArchive(
+        posts=posts,
+        pages_by_symbol=pages_by_symbol,
+        pages_by_stream=pages_by_stream,
+    )
+
+
+def validate_arctic_shift_coverage(
+    archive: ArcticShiftArchive,
+    tickers: Sequence[str],
+    trade_dates: Sequence[str],
+    *,
+    lookback_days: int,
+) -> None:
+    """Require each ticker's archive to span the full replay lookback window."""
+    if not trade_dates:
+        raise ValueError("Cannot validate Arctic Shift coverage without trade dates")
+    first_trade_date = min(_parse_date(value) for value in trade_dates)
+    last_trade_date = max(_parse_date(value) for value in trade_dates)
+    required_start = first_trade_date - timedelta(days=lookback_days)
+
+    failures = []
+    for ticker in dict.fromkeys(value.upper().strip() for value in tickers):
+        dates = sorted(
+            post.published_date
+            for post in archive.posts
+            if post.ticker == ticker
+            and post.published_date <= last_trade_date + timedelta(days=1)
+        )
+        if not dates:
+            failures.append(f"{ticker}: no posts")
+            continue
+        if dates[0] > required_start or dates[-1] < last_trade_date:
+            failures.append(
+                f"{ticker}: archive spans {dates[0]}..{dates[-1]}, required "
+                f"{required_start}..{last_trade_date}"
+            )
+    if failures:
+        raise ValueError(
+            "Insufficient Arctic Shift archive coverage: " + "; ".join(failures)
+        )
+
+
 def build_reddit_outputs(
     options: BuildDatasetOptions,
     dataset: EvalDataset,
@@ -494,11 +624,24 @@ def build_reddit_outputs(
     settings = get_settings()
     symbols = _symbols_for_indicator_outputs(options)
     subreddits = tuple(settings.sentiment.reddit_subreddits)
-    posts = fetch_reddit_posts_for_dataset(
-        tickers=symbols,
-        subreddits=subreddits,
-        request_delay_seconds=options.reddit_request_delay_seconds,
-    )
+    archive: ArcticShiftArchive | None = None
+    if options.use_arctic_shift_reddit:
+        archive = load_arctic_shift_posts(
+            ARCTIC_SHIFT_RAW_DIR, symbols, subreddits=subreddits
+        )
+        validate_arctic_shift_coverage(
+            archive,
+            symbols,
+            transaction_days,
+            lookback_days=options.lookback_days,
+        )
+        posts = list(archive.posts)
+    else:
+        posts = fetch_reddit_posts_for_dataset(
+            tickers=symbols,
+            subreddits=subreddits,
+            request_delay_seconds=options.reddit_request_delay_seconds,
+        )
     dataset.put_reddit_posts([_reddit_post_row(post) for post in posts])
 
     payloads_written = 0
@@ -512,6 +655,10 @@ def build_reddit_outputs(
                 subreddits=subreddits,
                 lookback_days=options.lookback_days,
                 limit_per_sub=options.reddit_limit_per_sub,
+                min_score=(settings.sentiment.reddit_min_score if archive else None),
+                min_comments=(
+                    settings.sentiment.reddit_min_comments if archive else None
+                ),
             )
             dataset.put_tool_output("fetch_reddit_posts", symbol, as_of_date, payload)
             payloads_written += 1
@@ -526,6 +673,8 @@ def build_reddit_outputs(
         lookback_days=options.lookback_days,
         payload_limit_per_sub=options.reddit_limit_per_sub,
         request_delay_seconds=options.reddit_request_delay_seconds,
+        source="arctic-shift" if archive else "reddit-rss",
+        pages_by_symbol=archive.pages_by_symbol if archive else None,
     )
 
 
@@ -744,6 +893,8 @@ def render_reddit_payload(
     subreddits: Sequence[str],
     lookback_days: int,
     limit_per_sub: int,
+    min_score: int | None = None,
+    min_comments: int | None = None,
 ) -> str:
     """Render the small prompt payload from the full raw Reddit buffer."""
     symbol = ticker.upper().strip()
@@ -761,6 +912,14 @@ def render_reddit_payload(
                 if post.ticker == symbol
                 and post.subreddit == subreddit
                 and start_date <= post.published_date <= end_date
+                and (
+                    min_score is None
+                    or (post.score is not None and post.score > min_score)
+                )
+                and (
+                    min_comments is None
+                    or (post.num_comments is not None and post.num_comments > min_comments)
+                )
             ),
             key=lambda post: post.published_at,
             reverse=True,
@@ -771,14 +930,23 @@ def render_reddit_payload(
             blocks.append(f"r/{subreddit}: ")
             continue
 
-        lines = [
-            f"r/{subreddit} - {len(selected)} recent posts mentioning {symbol} "
-            "(via RSS feed; scores/comments unavailable):"
-        ]
+        has_engagement = all(
+            post.score is not None and post.num_comments is not None
+            for post in selected
+        )
+        header = f"r/{subreddit} — {len(selected)} recent posts mentioning {symbol}"
+        if not has_engagement:
+            header += " (via RSS feed; scores/comments unavailable):"
+        else:
+            header += ":"
+        lines = [header]
         for post in selected:
             body = _trim_text(" ".join(post.body.split()), 240)
+            meta = post.published_date.isoformat()
+            if post.score is not None and post.num_comments is not None:
+                meta += f" · {post.score:>4}↑ · {post.num_comments:>3}c"
             lines.append(
-                f" [{post.published_date.isoformat()}] {' '.join(post.title.split())}"
+                f" [{meta}] {' '.join(post.title.split())}"
                 + (f"\n body excerpt: {body}" if body else "")
             )
         blocks.append("\n".join(lines))
@@ -788,7 +956,20 @@ def render_reddit_payload(
     return "\n\n".join(blocks)
 
 
-def _reddit_post_row(post: RedditPost) -> tuple[str, str, str, str, str, str, str]:
+def _reddit_post_row(
+    post: RedditPost,
+) -> tuple[
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    str | None,
+    int | None,
+    int | None,
+]:
     return (
         post.ticker,
         post.subreddit,
@@ -797,6 +978,75 @@ def _reddit_post_row(post: RedditPost) -> tuple[str, str, str, str, str, str, st
         post.url,
         post.title,
         post.body,
+        post.source_post_id,
+        post.score,
+        post.num_comments,
+    )
+
+
+def _arctic_shift_post_from_raw(
+    ticker: str,
+    expected_subreddit: str,
+    raw_post: object,
+    *,
+    path: Path,
+    index: int,
+) -> RedditPost:
+    location = f"{path} data[{index}]"
+    if not isinstance(raw_post, dict):
+        raise ValueError(f"Malformed Arctic Shift post at {location}: expected object")
+
+    required = (
+        "id",
+        "created_utc",
+        "subreddit",
+        "title",
+        "selftext",
+        "score",
+        "num_comments",
+    )
+    missing = [key for key in required if key not in raw_post or raw_post[key] is None]
+    if missing:
+        raise ValueError(
+            f"Malformed Arctic Shift post at {location}: missing required fields "
+            + ", ".join(missing)
+        )
+
+    post_id = raw_post["id"]
+    created_utc = raw_post["created_utc"]
+    subreddit = raw_post["subreddit"]
+    title = raw_post["title"]
+    body = raw_post["selftext"]
+    score = raw_post["score"]
+    num_comments = raw_post["num_comments"]
+    if not isinstance(post_id, str) or not post_id.strip():
+        raise ValueError(f"Malformed Arctic Shift post at {location}: invalid id")
+    if isinstance(created_utc, bool) or not isinstance(created_utc, (int, float)):
+        raise ValueError(f"Malformed Arctic Shift post at {location}: invalid created_utc")
+    if subreddit != expected_subreddit:
+        raise ValueError(
+            f"Malformed Arctic Shift post at {location}: subreddit {subreddit!r} "
+            f"does not match filename subreddit {expected_subreddit!r}"
+        )
+    if not isinstance(title, str) or not isinstance(body, str):
+        raise ValueError(f"Malformed Arctic Shift post at {location}: invalid text fields")
+    if isinstance(score, bool) or not isinstance(score, int):
+        raise ValueError(f"Malformed Arctic Shift post at {location}: invalid score")
+    if isinstance(num_comments, bool) or not isinstance(num_comments, int):
+        raise ValueError(f"Malformed Arctic Shift post at {location}: invalid num_comments")
+
+    published_at = datetime.fromtimestamp(created_utc, tz=timezone.utc)
+    return RedditPost(
+        ticker=ticker,
+        subreddit=subreddit,
+        title=title,
+        published_at=published_at,
+        published_date=published_at.date(),
+        url=f"https://www.reddit.com/comments/{post_id}/",
+        body=body,
+        source_post_id=post_id,
+        score=score,
+        num_comments=num_comments,
     )
 
 
@@ -949,21 +1199,26 @@ def render_tool_output_result(result: ToolOutputBuildResult) -> str:
 def render_reddit_result(result: RedditBuildResult) -> str:
     first_day = result.transaction_days[0] if result.transaction_days else "n/a"
     last_day = result.transaction_days[-1] if result.transaction_days else "n/a"
-    return "\n".join(
-        [
-            f"{result.tool_name} outputs built",
-            f"symbols: {', '.join(result.symbols)}",
-            f"subreddits: {', '.join(result.subreddits)}",
-            f"posts_written: {result.posts_written}",
-            f"payloads_written: {result.payloads_written}",
-            f"transaction_days: {len(result.transaction_days)}",
-            f"first_transaction_day: {first_day}",
-            f"last_transaction_day: {last_day}",
-            f"lookback_days: {result.lookback_days}",
-            f"payload_limit_per_sub: {result.payload_limit_per_sub}",
-            f"request_delay_seconds: {result.request_delay_seconds}",
-        ]
-    )
+    lines = [
+        f"{result.tool_name} outputs built",
+        f"source: {result.source}",
+        f"symbols: {', '.join(result.symbols)}",
+        f"subreddits: {', '.join(result.subreddits)}",
+        f"posts_written: {result.posts_written}",
+        f"payloads_written: {result.payloads_written}",
+        f"transaction_days: {len(result.transaction_days)}",
+        f"first_transaction_day: {first_day}",
+        f"last_transaction_day: {last_day}",
+        f"lookback_days: {result.lookback_days}",
+        f"payload_limit_per_sub: {result.payload_limit_per_sub}",
+        f"request_delay_seconds: {result.request_delay_seconds}",
+    ]
+    if result.pages_by_symbol:
+        lines.append("archive_pages:")
+        lines.extend(
+            f"  {symbol}: {result.pages_by_symbol[symbol]}" for symbol in result.symbols
+        )
+    return "\n".join(lines)
 
 
 def render_dataset_result(result: DatasetBuildResult) -> str:

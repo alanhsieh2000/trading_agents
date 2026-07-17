@@ -32,6 +32,9 @@ class RedditPost:
     published_date: date
     url: str
     body: str
+    source_post_id: str | None = None
+    score: int | None = None
+    num_comments: int | None = None
 
 
 @dataclass(frozen=True)

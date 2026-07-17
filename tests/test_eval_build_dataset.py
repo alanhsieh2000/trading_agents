@@ -37,6 +37,7 @@ def test_options_use_plan_07_defaults():
     assert options.news_limit == 40
     assert options.global_news_limit == 20
     assert options.global_news_lookback_days == 7
+    assert options.use_arctic_shift_reddit is True
     assert options.verify_only is True
 
 
@@ -50,6 +51,7 @@ def test_options_use_plan_b_defaults_when_requested():
     assert options.buffer_start_date == "2025-12-01"
     assert options.reddit_limit_per_sub == 5
     assert options.reddit_request_delay_seconds == 10.0
+    assert options.use_arctic_shift_reddit is False
 
 
 def test_reddit_cli_overrides_are_configurable():
@@ -422,6 +424,148 @@ def _reddit_post(
         url=f"https://reddit.example/comments/{ticker}-{subreddit}-{yyyy_mm_dd}/x",
         body=f"{ticker} body {yyyy_mm_dd}",
     )
+
+
+def _write_arctic_page(tmp_path, ticker, subreddit, sequence, posts):
+    raw_dir = tmp_path / "arctic-shift"
+    raw_dir.mkdir(exist_ok=True)
+    path = raw_dir / f"{ticker}-{subreddit}-{sequence}.json"
+    path.write_text(json.dumps({"data": posts}))
+    return raw_dir
+
+
+def _arctic_post(post_id, yyyy_mm_dd, subreddit, *, score=10, comments=5):
+    created_at = datetime.fromisoformat(yyyy_mm_dd + "T12:00:00+00:00")
+    return {
+        "id": post_id,
+        "created_utc": int(created_at.timestamp()),
+        "subreddit": subreddit,
+        "title": f"title {post_id}",
+        "selftext": f"body {post_id}",
+        "score": score,
+        "num_comments": comments,
+    }
+
+
+def _complete_arctic_archive(tmp_path, *, latest="2024-01-05"):
+    raw_dir = None
+    for subreddit in ("wallstreetbets", "stocks", "investing"):
+        posts = [
+            _arctic_post(f"{subreddit}-old", "2023-12-25", subreddit),
+            _arctic_post(f"{subreddit}-new", latest, subreddit),
+        ]
+        raw_dir = _write_arctic_page(tmp_path, "AAPL", subreddit, 1, posts)
+    return raw_dir
+
+
+def test_load_arctic_shift_posts_validates_and_deduplicates(tmp_path):
+    raw_dir = _complete_arctic_archive(tmp_path)
+    path = raw_dir / "AAPL-stocks-1.json"
+    payload = json.loads(path.read_text())
+    payload["data"].append(dict(payload["data"][0]))
+    path.write_text(json.dumps(payload))
+
+    archive = build_dataset.load_arctic_shift_posts(raw_dir, ["AAPL"])
+
+    assert archive.pages_by_symbol == {"AAPL": 3}
+    assert archive.pages_by_stream[("AAPL", "stocks")] == 1
+    assert len(archive.posts) == 6
+    assert archive.posts[0].source_post_id == "investing-old"
+    assert archive.posts[0].score == 10
+    assert archive.posts[0].num_comments == 5
+
+
+def test_load_arctic_shift_posts_rejects_missing_required_field(tmp_path):
+    raw_dir = _complete_arctic_archive(tmp_path)
+    path = raw_dir / "AAPL-stocks-1.json"
+    payload = json.loads(path.read_text())
+    del payload["data"][0]["score"]
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="missing required fields score"):
+        build_dataset.load_arctic_shift_posts(raw_dir, ["AAPL"])
+
+
+def test_validate_arctic_shift_coverage_rejects_short_archive(tmp_path):
+    raw_dir = _complete_arctic_archive(tmp_path, latest="2024-01-03")
+    archive = build_dataset.load_arctic_shift_posts(raw_dir, ["AAPL"])
+
+    with pytest.raises(ValueError, match="Insufficient Arctic Shift archive coverage"):
+        build_dataset.validate_arctic_shift_coverage(
+            archive, ["AAPL"], ["2024-01-02", "2024-01-05"], lookback_days=7
+        )
+
+
+def test_build_reddit_outputs_uses_arctic_shift_without_network(monkeypatch, tmp_path):
+    raw_dir = _complete_arctic_archive(tmp_path)
+    monkeypatch.setattr(build_dataset, "ARCTIC_SHIFT_RAW_DIR", raw_dir)
+
+    def unexpected_network(**_kwargs):
+        raise AssertionError("live Reddit must not be called")
+
+    monkeypatch.setattr(
+        build_dataset, "fetch_reddit_posts_for_dataset", unexpected_network
+    )
+    options = build_dataset.BuildDatasetOptions(
+        dataset_path=str(tmp_path / "eval.duckdb"),
+        tickers=("AAPL",),
+        benchmark="SPY",
+        start_date="2024-01-02",
+        end_date="2024-01-05",
+        buffer_start_date="2023-12-01",
+        price_tail_days=2,
+        lookback_days=7,
+        weight_over=0.5,
+        weight_under=0.5,
+        limit_days=None,
+        verify_only=False,
+        reddit_limit_per_sub=1,
+        use_arctic_shift_reddit=True,
+    )
+
+    with EvalDataset(options.dataset_path) as dataset:
+        result = build_dataset.build_reddit_outputs(
+            options, dataset, ["2024-01-02", "2024-01-05"]
+        )
+        payload = dataset.tool_output("fetch_reddit_posts", "AAPL", "2024-01-05")
+        rows = dataset.reddit_post_rows("AAPL")
+
+    assert result.source == "arctic-shift"
+    assert result.pages_by_symbol == {"AAPL": 3}
+    assert result.posts_written == 6
+    assert "scores/comments unavailable" not in payload
+    assert "[2024-01-05 ·   10↑ ·   5c] title" in payload
+    assert rows[-1]["score"] == "10"
+    assert rows[-1]["num_comments"] == "5"
+
+
+def test_build_reddit_outputs_validates_before_writing(monkeypatch, tmp_path):
+    raw_dir = _complete_arctic_archive(tmp_path, latest="2024-01-03")
+    monkeypatch.setattr(build_dataset, "ARCTIC_SHIFT_RAW_DIR", raw_dir)
+    options = build_dataset.BuildDatasetOptions(
+        dataset_path=str(tmp_path / "eval.duckdb"),
+        tickers=("AAPL",),
+        benchmark="SPY",
+        start_date="2024-01-02",
+        end_date="2024-01-05",
+        buffer_start_date="2023-12-01",
+        price_tail_days=2,
+        lookback_days=7,
+        weight_over=0.5,
+        weight_under=0.5,
+        limit_days=None,
+        verify_only=False,
+        use_arctic_shift_reddit=True,
+    )
+
+    with EvalDataset(options.dataset_path) as dataset:
+        dataset.put_tool_output("fetch_reddit_posts", "AAPL", "2024-01-02", "old")
+        with pytest.raises(ValueError, match="Insufficient Arctic Shift"):
+            build_dataset.build_reddit_outputs(
+                options, dataset, ["2024-01-02", "2024-01-05"]
+            )
+        assert dataset.tool_output("fetch_reddit_posts", "AAPL", "2024-01-02") == "old"
+        assert dataset.reddit_post_rows("AAPL") == []
 
 
 def test_fetch_reddit_posts_for_dataset_or_joins_aliases_and_keeps_all(monkeypatch):

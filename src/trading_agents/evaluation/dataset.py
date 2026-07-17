@@ -10,9 +10,9 @@ The dataset holds two tables:
 - ``prices(symbol, date, close)`` — daily close prices for the evaluated
   tickers and the benchmark across the buffered range, used by the exchange
   simulator and by the portfolio stage's realized-return fetcher.
-- ``reddit_posts(ticker, subreddit, url, ...)`` — the raw RSS posts collected
-  for the Plan B Reddit buffer, kept separately from the small replay payloads
-  so reruns can audit what was available from Reddit.
+- ``reddit_posts(ticker, subreddit, url, ...)`` — raw Reddit posts collected
+  from Plan B RSS or loaded from the canonical Arctic Shift archive, kept
+  separately from replay payloads so reruns can audit the source material.
 
 Both tables use a primary key so the builder can upsert idempotently with
 ``INSERT OR REPLACE``: rerunning the builder refreshes rows rather than
@@ -81,9 +81,21 @@ class EvalDataset:
                 url            TEXT NOT NULL,
                 title          TEXT NOT NULL,
                 body           TEXT NOT NULL,
+                source_post_id TEXT,
+                score          INTEGER,
+                num_comments   INTEGER,
                 PRIMARY KEY (ticker, subreddit, url)
             )
             """
+        )
+        self._conn.execute(
+            "ALTER TABLE reddit_posts ADD COLUMN IF NOT EXISTS source_post_id TEXT"
+        )
+        self._conn.execute(
+            "ALTER TABLE reddit_posts ADD COLUMN IF NOT EXISTS score INTEGER"
+        )
+        self._conn.execute(
+            "ALTER TABLE reddit_posts ADD COLUMN IF NOT EXISTS num_comments INTEGER"
         )
 
     # -- writes ---------------------------------------------------------------
@@ -109,24 +121,60 @@ class EvalDataset:
 
     def put_reddit_posts(
         self,
-        rows: list[tuple[str, str, str, str, str, str, str]],
+        rows: list[
+            tuple[
+                str,
+                str,
+                str,
+                str,
+                str,
+                str,
+                str,
+                str | None,
+                int | None,
+                int | None,
+            ]
+        ],
     ) -> None:
-        """Upsert raw Reddit RSS posts.
+        """Upsert raw Reddit posts.
 
         Rows are ``(ticker, subreddit, published_at, published_date, url, title,
-        body)``. The primary key intentionally includes ``ticker`` because one
-        Reddit post can be relevant to more than one ticker query.
+        body, source_post_id, score, num_comments)``. The primary key
+        intentionally includes ``ticker`` because one post can be relevant to
+        more than one ticker query.
         """
         if not rows:
             return
         self._conn.executemany(
             "INSERT OR REPLACE INTO reddit_posts "
-            "(ticker, subreddit, published_at, published_date, url, title, body) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(ticker, subreddit, published_at, published_date, url, title, body, "
+            "source_post_id, score, num_comments) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
-                (ticker.upper(), subreddit, published_at, published_date, url, title, body)
-                for ticker, subreddit, published_at, published_date, url, title, body
-                in rows
+                (
+                    ticker.upper(),
+                    subreddit,
+                    published_at,
+                    published_date,
+                    url,
+                    title,
+                    body,
+                    source_post_id,
+                    score,
+                    num_comments,
+                )
+                for (
+                    ticker,
+                    subreddit,
+                    published_at,
+                    published_date,
+                    url,
+                    title,
+                    body,
+                    source_post_id,
+                    score,
+                    num_comments,
+                ) in rows
             ],
         )
 
@@ -218,16 +266,20 @@ class EvalDataset:
         ).fetchall()
         return [(str(date), float(close)) for date, close in rows]
 
-    def reddit_post_rows(self, ticker: str | None = None) -> list[dict[str, str]]:
+    def reddit_post_rows(
+        self, ticker: str | None = None
+    ) -> list[dict[str, str | None]]:
         """Return raw Reddit post rows sorted by ticker/date/subreddit."""
         if ticker is None:
             rows = self._conn.execute(
-                "SELECT ticker, subreddit, published_at, published_date, url, title, body "
+                "SELECT ticker, subreddit, published_at, published_date, url, title, body, "
+                "source_post_id, score, num_comments "
                 "FROM reddit_posts ORDER BY ticker, published_at, subreddit, url"
             ).fetchall()
         else:
             rows = self._conn.execute(
-                "SELECT ticker, subreddit, published_at, published_date, url, title, body "
+                "SELECT ticker, subreddit, published_at, published_date, url, title, body, "
+                "source_post_id, score, num_comments "
                 "FROM reddit_posts WHERE ticker = ? "
                 "ORDER BY ticker, published_at, subreddit, url",
                 [ticker.upper()],
@@ -240,8 +292,20 @@ class EvalDataset:
             "url",
             "title",
             "body",
+            "source_post_id",
+            "score",
+            "num_comments",
         )
-        return [dict(zip(keys, (str(value) for value in row), strict=True)) for row in rows]
+        return [
+            dict(
+                zip(
+                    keys,
+                    (None if value is None else str(value) for value in row),
+                    strict=True,
+                )
+            )
+            for row in rows
+        ]
 
     def transaction_days(
         self,

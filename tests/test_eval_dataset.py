@@ -66,6 +66,9 @@ def test_reddit_post_rows_round_trip_keeps_ticker_specific_matches(dataset):
             "https://reddit.example/comments/abc/shared",
             "AAPL title",
             "AAPL body",
+            "abc",
+            12,
+            8,
         ),
         (
             "googl",
@@ -75,11 +78,15 @@ def test_reddit_post_rows_round_trip_keeps_ticker_specific_matches(dataset):
             "https://reddit.example/comments/abc/shared",
             "GOOGL title",
             "GOOGL body",
+            "abc",
+            7,
+            4,
         ),
     ]
 
     dataset.put_reddit_posts(rows)
-    dataset.put_reddit_posts([rows[0][:-1] + ("AAPL body v2",)])
+    updated = rows[0][:6] + ("AAPL body v2",) + rows[0][7:]
+    dataset.put_reddit_posts([updated])
 
     all_rows = dataset.reddit_post_rows()
     assert len(all_rows) == 2
@@ -92,6 +99,9 @@ def test_reddit_post_rows_round_trip_keeps_ticker_specific_matches(dataset):
             "url": "https://reddit.example/comments/abc/shared",
             "title": "AAPL title",
             "body": "AAPL body v2",
+            "source_post_id": "abc",
+            "score": "12",
+            "num_comments": "8",
         }
     ]
 
