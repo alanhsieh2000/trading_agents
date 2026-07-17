@@ -61,6 +61,20 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [ ] (pending) Create `src/trading_agents/evaluation/run_eval.py` and the `run-eval` entry point.
 - [x] (2026-06-11) Added unit tests `tests/test_eval_backtest.py` (10) and `tests/test_eval_dataset.py` (7); all pass, full suite 113 passed with no regressions.
 - [ ] (pending) Build the committed dataset `data/eval_dataset.duckdb` and run a smoke evaluation.
+- [x] (2026-07-17) Audited all 1,891 prepared tool-output keys, 364 price rows, and
+  1,051 raw Reddit rows for missing records, no-data fallbacks, stored HTTP/API errors,
+  time bounds, malformed payloads, and suspicious future content. Key coverage is
+  complete and no stored API/runtime errors were found, but the dataset is not ready:
+  six GOOGL Reddit rows have no data; every indicator row has two Bollinger-band warm-up
+  blanks; current fundamentals and 2024/2025 financial statements leak post-trade
+  information into all replay dates; confirmed future/unrelated ticker and global news
+  contaminates multiple rows; and 133 unused GOOGL raw Reddit posts are dated in
+  2025-12-19..2026-02-13.
+- [ ] (pending) Resolve the dataset-readiness audit findings before the smoke evaluation:
+  replace or explicitly remove point-in-time-unsafe fundamentals/statements, repair or
+  exclude contaminated news blocks, decide how to represent indicator warm-up values and
+  valid Reddit no-data windows, and remove future raw Reddit rows from the canonical
+  artifact.
 - [ ] (pending) Run the full evaluation and record CR per stock in `Outcomes & Retrospective`.
 
 Use timestamps (for example `(2026-06-11 09:00Z)`) when checking items off so a
@@ -105,6 +119,16 @@ future contributor can gauge the rate of progress.
   `1..3562`, and AMZN `1..6620`, each spanning 2023-12-17 through at least 2026-07-13.
   The bounded canonical render retained 43,743 AAPL, 9,090 GOOGL, and 15,926 AMZN
   messages from the required lookback/replay range and produced 183 full payloads.
+- Observation (2026-07-17): A post-build audit found complete key coverage but material
+  point-in-time and content-quality defects in `data/eval_dataset.duckdb`.
+  Evidence: all 1,891 expected tool keys and all 364 expected positive price rows are
+  present, with no stored HTTP/API/runtime errors. However, six GOOGL Reddit payloads are
+  no-data fallbacks; all 183 indicator payloads have blank first-row `boll_lb` and
+  `boll_ub`; all 183 current-fundamentals rows and all 549 financial-statement rows use
+  snapshots unavailable on their 2024-Q1 trade dates; at least 29 ticker-news rows and
+  18 replicated global-news rows contain confirmed future/unrelated material; and the
+  raw Reddit table retains 133 GOOGL posts from late 2025/early 2026. These findings
+  block a claim that the backtest dataset is ready.
 - Observation: The original TradingAgents repository works around Reddit JSON
   blocking by using Reddit RSS/Atom search first.
   Evidence: `https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/dataflows/reddit.py`
@@ -1077,3 +1101,9 @@ Revision Note: 2026-07-17 Implemented and populated canonical StockTwits archive
 ingestion. This revision records strict numeric pagination, schema/cursor/chronology and
 coverage validation, deterministic internal-page sorting, the 21,165-page validation
 evidence, and the resulting 183 full replay payloads.
+
+Revision Note: 2026-07-17 Re-audited the populated DuckDB artifact before declaring it
+ready. This revision records complete row coverage and the absence of stored API errors,
+but adds remediation work for Reddit no-data rows, indicator warm-up blanks,
+point-in-time-unsafe fundamentals/statements, future or unrelated news contamination,
+and future-dated raw Reddit rows.
