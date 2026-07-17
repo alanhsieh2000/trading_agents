@@ -110,6 +110,32 @@ class EvalDataset:
             [tool_name, ticker.upper(), as_of_date, payload],
         )
 
+    def put_tool_outputs(
+        self, rows: list[tuple[str, str, str, str]]
+    ) -> None:
+        """Atomically upsert tool-output rows.
+
+        Rows are ``(tool_name, ticker, as_of_date, payload)``. Rendering callers
+        can prepare and validate a complete replacement set before any stored
+        payload changes.
+        """
+        if not rows:
+            return
+        self._conn.execute("BEGIN TRANSACTION")
+        try:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO tool_outputs "
+                "(tool_name, ticker, as_of_date, payload) VALUES (?, ?, ?, ?)",
+                [
+                    (tool_name, ticker.upper(), as_of_date, payload)
+                    for tool_name, ticker, as_of_date, payload in rows
+                ],
+            )
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+
     def put_prices(self, symbol: str, rows: list[tuple[str, float]]) -> None:
         """Upsert a symbol's ``(date, close)`` rows."""
         if not rows:

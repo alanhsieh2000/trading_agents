@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import duckdb
 import pytest
 
 from trading_agents.evaluation.dataset import EvalDataset
@@ -25,6 +26,41 @@ def test_tool_output_upsert_replaces(dataset):
     dataset.put_tool_output("get_news", "AAPL", "2024-01-03", "v1")
     dataset.put_tool_output("get_news", "AAPL", "2024-01-03", "v2")
     assert dataset.tool_output("get_news", "AAPL", "2024-01-03") == "v2"
+
+
+def test_tool_outputs_batch_upserts_all_rows(dataset):
+    dataset.put_tool_outputs(
+        [
+            ("fetch_reddit_posts", "aapl", "2024-01-02", "AAPL payload"),
+            ("fetch_reddit_posts", "googl", "2024-01-02", "GOOGL payload"),
+        ]
+    )
+
+    assert (
+        dataset.tool_output("fetch_reddit_posts", "AAPL", "2024-01-02")
+        == "AAPL payload"
+    )
+    assert (
+        dataset.tool_output("fetch_reddit_posts", "GOOGL", "2024-01-02")
+        == "GOOGL payload"
+    )
+
+
+def test_tool_outputs_batch_rolls_back_every_row_on_failure(dataset):
+    dataset.put_tool_output("fetch_reddit_posts", "AAPL", "2024-01-02", "old")
+
+    with pytest.raises(duckdb.ConstraintException):
+        dataset.put_tool_outputs(
+            [
+                ("fetch_reddit_posts", "AAPL", "2024-01-02", "new"),
+                # A null payload violates the table contract after the first upsert.
+                ("fetch_reddit_posts", "GOOGL", "2024-01-02", None),  # type: ignore[list-item]
+            ]
+        )
+
+    assert dataset.tool_output("fetch_reddit_posts", "AAPL", "2024-01-02") == "old"
+    with pytest.raises(KeyError):
+        dataset.tool_output("fetch_reddit_posts", "GOOGL", "2024-01-02")
 
 
 def test_replace_matching_tool_outputs_is_guarded_and_atomic(dataset):

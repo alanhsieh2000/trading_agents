@@ -22,8 +22,6 @@ class SentimentSettings(BaseModel):
     reddit_limit_per_sub: int = Field(default=5, ge=0)
     reddit_timeout: float = Field(default=10.0, gt=0)
     reddit_inter_request_delay: float = Field(default=0.4, ge=0)
-    reddit_min_score: int = Field(default=4)
-    reddit_min_comments: int = Field(default=3)
     reddit_recency_window_seconds: int = Field(default=7 * 24 * 60 * 60, ge=0)
 
 

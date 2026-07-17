@@ -73,7 +73,6 @@ class ArcticShiftPage:
 class PatchResult:
     ticker: str
     posts_fetched: int
-    posts_after_quality_filter: int
     payloads_replaced: int
     raw_files_written: int
     backup_path: Path | None
@@ -222,7 +221,10 @@ def render_reddit_payload(
         )[: max(limit_per_sub, 0)]
         total_posts += len(selected)
         if not selected:
-            blocks.append(f"r/{subreddit}: ")
+            blocks.append(
+                f"r/{subreddit}: <no posts found mentioning "
+                f"{symbol} in the past 7 days>"
+            )
             continue
 
         lines = [f"r/{subreddit} — {len(selected)} recent posts mentioning {symbol}:"]
@@ -238,7 +240,11 @@ def render_reddit_payload(
         blocks.append("\n".join(lines))
 
     if total_posts == 0:
-        return f"No data available for Reddit posts for {symbol}."
+        subreddit_names = ", ".join(f"r/{subreddit}" for subreddit in subreddits)
+        return (
+            f"<no Reddit posts found mentioning {symbol} across "
+            f"{subreddit_names} in the past 7 days>"
+        )
     return "\n\n".join(blocks)
 
 
@@ -251,7 +257,6 @@ def apply_patch(
     raw_dir: Path,
     delay_seconds: float,
     limit: int,
-    quality_filter: bool,
     client: ArcticShiftClient | None = None,
 ) -> PatchResult:
     symbol = ticker.upper().strip()
@@ -261,7 +266,7 @@ def apply_patch(
             "fetch_reddit_posts", symbol, no_data_payload
         )
     if not target_dates:
-        return PatchResult(symbol, 0, 0, 0, 0, None)
+        return PatchResult(symbol, 0, 0, 0, None)
     if len(target_dates) != EXPECTED_AFFECTED_COUNT:
         raise RuntimeError(
             f"Expected {EXPECTED_AFFECTED_COUNT} affected rows for {symbol}, "
@@ -282,30 +287,26 @@ def apply_patch(
         raw_dir=raw_dir,
         client=client,
     )
-    filtered_posts = [
-        post
-        for post in posts
-        if not quality_filter
-        or (
-            post.score > settings.reddit_min_score
-            and post.num_comments > settings.reddit_min_comments
-        )
-    ]
     replacements = {
         as_of_date: render_reddit_payload(
             symbol,
             as_of_date,
-            filtered_posts,
+            posts,
             subreddits=subreddits,
             lookback_days=get_settings().analyst_stage.lookback_days,
             limit_per_sub=settings.reddit_limit_per_sub,
         )
         for as_of_date in target_dates
     }
+    empty_payload = (
+        f"<no Reddit posts found mentioning {symbol} across "
+        f"{', '.join(f'r/{subreddit}' for subreddit in subreddits)} "
+        "in the past 7 days>"
+    )
     empty_dates = [
         as_of_date
         for as_of_date, payload in replacements.items()
-        if payload == no_data_payload
+        if payload == empty_payload
     ]
     if empty_dates:
         raise RuntimeError(
@@ -325,7 +326,6 @@ def apply_patch(
     return PatchResult(
         ticker=symbol,
         posts_fetched=len(posts),
-        posts_after_quality_filter=len(filtered_posts),
         payloads_replaced=replaced,
         raw_files_written=len(raw_files),
         backup_path=backup_path,
@@ -343,12 +343,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY_SECONDS)
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
     parser.add_argument("--raw-dir", default=str(DEFAULT_RAW_DIR))
-    parser.add_argument(
-        "--quality-filter",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Require scores/comments to pass the live Reddit quality thresholds.",
-    )
     return parser.parse_args(argv)
 
 
@@ -366,7 +360,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         raw_dir=Path(args.raw_dir),
         delay_seconds=max(args.delay, 0.0),
         limit=min(max(args.limit, 1), 100),
-        quality_filter=bool(args.quality_filter),
     )
     if result.payloads_replaced == 0:
         print(f"Arctic Shift patch already applied for {result.ticker}; no rows changed.")
@@ -376,7 +369,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             [
                 f"Arctic Shift Reddit patch applied for {result.ticker}",
                 f"posts_fetched: {result.posts_fetched}",
-                f"posts_after_quality_filter: {result.posts_after_quality_filter}",
                 f"raw_files_written: {result.raw_files_written}",
                 f"payloads_replaced: {result.payloads_replaced}",
                 f"backup_path: {result.backup_path}",

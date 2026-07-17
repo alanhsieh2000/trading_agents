@@ -226,10 +226,28 @@ def test_render_payload_matches_live_rich_format_and_excludes_future_posts():
     assert "[2026-01-02 ·   20↑ ·  12c] Title newer" in payload
     assert payload.index("Title newer") < payload.index("Title older")
     assert "Title future" not in payload
-    assert payload.endswith("r/stocks: ")
+    assert payload.endswith(
+        "r/stocks: <no posts found mentioning GOOGL in the past 7 days>"
+    )
 
 
-def test_apply_patch_filters_quality_and_replaces_only_exact_targets(
+def test_render_payload_uses_upstream_message_when_all_subreddits_are_empty():
+    payload = render_reddit_payload(
+        "googl",
+        "2026-01-02",
+        [],
+        subreddits=("wallstreetbets", "stocks", "investing"),
+        lookback_days=7,
+        limit_per_sub=5,
+    )
+
+    assert payload == (
+        "<no Reddit posts found mentioning GOOGL across r/wallstreetbets, "
+        "r/stocks, r/investing in the past 7 days>"
+    )
+
+
+def test_apply_patch_keeps_low_engagement_posts_and_replaces_only_exact_targets(
     monkeypatch, tmp_path
 ):
     dataset_path = tmp_path / "eval.duckdb"
@@ -273,11 +291,9 @@ def test_apply_patch_filters_quality_and_replaces_only_exact_targets(
         raw_dir=tmp_path / "raw",
         delay_seconds=1,
         limit=100,
-        quality_filter=True,
     )
 
     assert result.posts_fetched == 31
-    assert result.posts_after_quality_filter == 30
     assert result.payloads_replaced == 30
     assert result.backup_path is not None and result.backup_path.exists()
     with EvalDataset(dataset_path, read_only=True) as dataset:
@@ -291,6 +307,9 @@ def test_apply_patch_filters_quality_and_replaces_only_exact_targets(
         assert (
             dataset.tool_output("fetch_reddit_posts", "AAPL", "2026-01-01")
             == "AAPL UNCHANGED"
+        )
+        assert "low-quality" in dataset.tool_output(
+            "fetch_reddit_posts", "GOOGL", "2026-01-15"
         )
 
 
@@ -318,7 +337,6 @@ def test_apply_patch_refuses_partial_target_set_before_fetch(monkeypatch, tmp_pa
             raw_dir=tmp_path / "raw",
             delay_seconds=1,
             limit=100,
-            quality_filter=True,
         )
 
 
@@ -335,7 +353,6 @@ def test_apply_patch_is_idempotent_when_no_targets_remain(tmp_path):
         raw_dir=tmp_path / "raw",
         delay_seconds=1,
         limit=100,
-        quality_filter=True,
     )
 
     assert result.payloads_replaced == 0

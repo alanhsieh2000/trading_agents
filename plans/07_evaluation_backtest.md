@@ -48,7 +48,8 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [x] (2026-06-17) Implemented and populated dataset building for `get_indicators`: records all allowed indicators from `src/trading_agents/tools/market_data.py` for each configured ticker and trading day using the analyst-stage lookback window. Wrote 183 persistent `get_indicators` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero SPY indicator rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison matched for `AMZN` on `2024-02-27` with 12 indicators.
 - [x] (2026-06-17 13:03Z) Implemented and populated shared dataset building for `get_news`: records ticker-news text through the Exa historical source layer with the same markdown/no-news/error contract as the live Yahoo-backed tool. The builder uses a doubled news limit (`settings.news.ticker_limit * 2`, currently 40) for buffer coverage, writes ticker rows only, and shares the same implementation with Plan B. Wrote 183 persistent `get_news` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AMZN on `2024-03-05`; the evaluation-backed `get_news` tool matched the DuckDB payload exactly and returned 39 articles for `2024-02-27..2024-03-05`.
 - [x] (2026-06-17) Implemented and populated shared dataset building for `get_global_news`: records one Exa historical global-market-news payload per trading day, stores it under each evaluated ticker key for existing dataset-backed tool replay, and uses a doubled global-news limit (`settings.news.global_limit * 2`, currently 20). Wrote 183 persistent `get_global_news` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-21`; the evaluation-backed `get_global_news` tool matched the DuckDB payload exactly and returned the shared global payload for all ticker keys on that date.
-- [x] (2026-07-17 07:40Z) Implemented canonical dataset building for `fetch_reddit_posts`: validates all retained Arctic Shift pages and required fields, requires every configured ticker/subreddit stream and full replay-window coverage, deduplicates by ticker/post ID, applies the live sentiment quality thresholds, and renders rich date/score/comment/title/body payloads without network calls. Extended raw Reddit rows to retain source IDs and engagement counts. Ingested 1,051 unique posts and 183 tool payloads into `data/eval_dataset.duckdb` (61 each for AAPL, GOOGL, and AMZN); 177 payloads contain rich posts and 6 are valid no-data windows. Focused tests reported 37 passed.
+- [x] (2026-07-17 07:40Z) Implemented canonical dataset building for `fetch_reddit_posts`: validates all retained Arctic Shift pages and required fields, requires every configured ticker/subreddit stream and full replay-window coverage, deduplicates by ticker/post ID, and renders rich date/score/comment/title/body payloads without network calls. Extended raw Reddit rows to retain source IDs and engagement counts. Ingested 1,051 unique posts and 183 tool payloads into `data/eval_dataset.duckdb` (61 each for AAPL, GOOGL, and AMZN). Focused tests reported 37 passed.
+- [x] (2026-07-17 13:30Z) Aligned live and replay Reddit output with upstream recent-post semantics: removed score/comment quality gates, retained the configurable five-post-per-subreddit default, added upstream named empty-subreddit and all-empty messages, and atomically regenerated all 183 Reddit payloads from the local Arctic Shift archive. All 183 prior payloads changed; all now contain recent posts, 26 named partial-empty blocks remain, and zero old no-data or blank-subreddit blocks remain. The full suite reports 190 passed.
 - [x] (2026-07-17 08:02Z) Implemented canonical dataset building for `fetch_stocktwits_messages`: validates all 21,165 retained pagination pages, their numeric filename sequence, symbol/cursor/message schemas, decreasing cursor bounds, page chronology, duplicate consistency, and full replay-window coverage before writes. Messages are chronologically normalized and rendered in the live sentiment format without StockTwits or Exa calls. Populated 183 payloads in `data/eval_dataset.duckdb` (61 per ticker); every payload contains the configured 30 messages. Focused validation reported 69 passed.
 - [x] Implement dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
 - [x] (2026-06-18 14:16Z) Implemented and populated shared dataset building for `get_balance_sheet`: records the yfinance latest balance-sheet statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_balance_sheet` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-08`; the evaluation-backed `get_balance_sheet` tool matched the live tool exactly and AAPL had one distinct payload across all 61 replay dates.
@@ -65,16 +66,16 @@ makes the evaluation reproducible and offline (apart from the language-model cal
   1,051 raw Reddit rows for missing records, no-data fallbacks, stored HTTP/API errors,
   time bounds, malformed payloads, and suspicious future content. Key coverage is
   complete and no stored API/runtime errors were found, but the dataset is not ready:
-  six GOOGL Reddit rows have no data; every indicator row has two Bollinger-band warm-up
-  blanks; current fundamentals and 2024/2025 financial statements leak post-trade
+  every indicator row has two Bollinger-band warm-up blanks; current fundamentals and
+  2024/2025 financial statements leak post-trade
   information into all replay dates; confirmed future/unrelated ticker and global news
   contaminates multiple rows; and 133 unused GOOGL raw Reddit posts are dated in
   2025-12-19..2026-02-13.
 - [ ] (pending) Resolve the dataset-readiness audit findings before the smoke evaluation:
   replace or explicitly remove point-in-time-unsafe fundamentals/statements, repair or
-  exclude contaminated news blocks, decide how to represent indicator warm-up values and
-  valid Reddit no-data windows, and remove future raw Reddit rows from the canonical
-  artifact.
+  exclude contaminated news blocks, decide how to represent indicator warm-up values,
+  and remove future raw Reddit rows from the canonical artifact. The Reddit replay-output
+  finding is resolved; the future raw-row cleanup remains separate.
 - [ ] (pending) Run the full evaluation and record CR per stock in `Outcomes & Retrospective`.
 
 Use timestamps (for example `(2026-06-11 09:00Z)`) when checking items off so a
@@ -122,13 +123,14 @@ future contributor can gauge the rate of progress.
 - Observation (2026-07-17): A post-build audit found complete key coverage but material
   point-in-time and content-quality defects in `data/eval_dataset.duckdb`.
   Evidence: all 1,891 expected tool keys and all 364 expected positive price rows are
-  present, with no stored HTTP/API/runtime errors. However, six GOOGL Reddit payloads are
-  no-data fallbacks; all 183 indicator payloads have blank first-row `boll_lb` and
+  present, with no stored HTTP/API/runtime errors. The six GOOGL Reddit payloads originally
+  appeared as no-data fallbacks; all 183 indicator payloads have blank first-row `boll_lb` and
   `boll_ub`; all 183 current-fundamentals rows and all 549 financial-statement rows use
   snapshots unavailable on their 2024-Q1 trade dates; at least 29 ticker-news rows and
   18 replicated global-news rows contain confirmed future/unrelated material; and the
-  raw Reddit table retains 133 GOOGL posts from late 2025/early 2026. These findings
-  block a claim that the backtest dataset is ready.
+  raw Reddit table retains 133 GOOGL posts from late 2025/early 2026. The Reddit payload
+  finding was resolved on 2026-07-17 by removing obsolete engagement filtering and
+  rebuilding every Reddit output; the remaining findings still block readiness.
 - Observation: The original TradingAgents repository works around Reddit JSON
   blocking by using Reddit RSS/Atom search first.
   Evidence: `https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/dataflows/reddit.py`
@@ -150,9 +152,10 @@ future contributor can gauge the rate of progress.
   pairs after ID deduplication.
   Evidence: the loader reported 62 AAPL pages with 475 posts, 84 GOOGL pages with 284
   posts, and 64 AMZN pages with 292 posts. It validated the required 2023-12-26 through
-  2024-03-28 span for all three tickers and wrote 61 payload rows per ticker. Of the 183
-rows, 177 contain score/comment metadata and 6 are valid empty seven-day windows. The
-full repository suite reported 181 passed after ingestion.
+  2024-03-28 span for all three tickers and wrote 61 payload rows per ticker. Initial
+  engagement filtering produced 177 rich rows and 6 misleading empty rows; the later
+  recency-only rebuild produces rich recent-post content in all 183 rows. The full
+  repository suite reported 190 passed after that rebuild.
 - Observation: `exa-py` is already a declared dependency but is unused in the
   codebase, and Exa's search API supports `start_published_date`/`end_published_date`.
   Evidence: `pyproject.toml` lists `exa-py>=2.13.0`; a repository-wide grep finds no import of it. Exa's `/search` documents published-date filters for the `news` category and for uncategorized searches.
@@ -299,13 +302,23 @@ is ideal).
   it is not a dataset-preparation fallback for this evaluation.
   Date/Author: 2026-07-16 / Codex
 
-- Decision: Apply the live Reddit tool's strict quality gates when rendering Arctic
-  Shift replay payloads and retain the unfiltered archive rows for auditability.
+- Decision (superseded): Apply the live Reddit tool's strict quality gates when rendering
+  Arctic Shift replay payloads and retain the unfiltered archive rows for auditability.
   Rationale: `fetch_reddit_posts()` only presents posts whose score and comment count
   exceed the configured minima. Matching that behavior keeps evaluation prompts
   format- and quality-equivalent, while storing every valid deduplicated source post
   preserves the evidence needed to inspect or rerender the dataset later.
   Date/Author: 2026-07-17 / Codex
+
+- Decision: Select recent Reddit posts without score/comment thresholds, cap each
+  subreddit with the configurable `reddit_limit_per_sub` setting (default 5), and use
+  upstream empty-result messages.
+  Rationale: Current upstream `fetch_reddit_posts()` presents the newest posts returned by
+  the seven-day search and does not discard low-engagement results. The former strict
+  `AND` gate mislabeled six GOOGL windows as having no data despite archived posts. Shared
+  live/replay semantics and an atomic full-payload rebuild prevent that drift from
+  recurring while Arctic Shift still supplies score/comment metadata for display.
+  Date/Author: 2026-07-17 / Codex (confirmed with the user)
 
 - Decision: Treat `data/raw-backtest/stocktwits/` as an immutable, auditable input
   artifact rather than paginating StockTwits during dataset construction.
@@ -546,6 +559,18 @@ for deterministic rendering. The completed ingestion validated 10,983 AAPL, 3,56
 and 6,620 AMZN pages and wrote 183 full `fetch_stocktwits_messages` payloads to
 `data/eval_dataset.duckdb`. Focused builder/dataset/backtest/tool validation reported 69
 passed, and the full repository suite reported 186 passed.
+
+Milestone 11 — Reddit recent-post alignment and full replay refresh (2026-07-17).
+Removed the obsolete score/comment thresholds from settings, live fetching, the
+canonical archive renderer, and the legacy Arctic Shift patch path. Both live and
+historical formatting now name an empty subreddit and use the upstream aggregate message
+when every subreddit is empty. `EvalDataset.put_tool_outputs()` provides an atomic batch
+upsert, so the canonical builder renders every Reddit payload before replacing stored
+rows. The offline refresh rewrote all 183 Reddit outputs (61 per ticker) from 1,051 raw
+posts; zero fresh-render mismatches, old no-data fallbacks, or blank subreddit blocks
+remain. The 1,708 unrelated tool outputs retained SHA-256
+`ffed0472b518d639728e1c682ad7c244c981f269cb4c949b4b7f5cbdb39afbf1` before and after,
+focused validation reported 80 passed, and the full suite reported 190 passed.
 
 
 ## Context and Orientation
@@ -898,8 +923,8 @@ Acceptance is behavioral:
   ingestion.
 - The Reddit and StockTwits archive builders reject malformed pages, missing required
   fields, and insufficient requested ticker/date coverage before they create or update
-  their `tool_outputs` rows. Valid empty lookback windows retain the ordinary no-data
-  payload.
+  their `tool_outputs` rows. A partially empty Reddit result names each empty subreddit;
+  an all-empty result uses the upstream aggregate seven-day message.
 - `uv run build-eval-dataset --tickers AAPL --limit-days 3` produces a DuckDB file with
   the expected implemented `tool_outputs` and `prices` rows, and is idempotent (running
   it twice does not duplicate rows). For each newly implemented non-Reddit source, data
@@ -927,8 +952,9 @@ collection for prices, `get_stock_data`, `get_indicators`, `get_news`,
 `get_global_news`, `fetch_stocktwits_messages`, or fundamentals/statement tools.
 
 After validation passes, the dataset build uses `INSERT OR REPLACE`, so it can be run
-repeatedly and partially (via `--tickers`/`--limit-days`) without duplicating rows;
-rerunning refreshes existing rows. The evaluation run writes only under `output/eval/`
+repeatedly and partially (via `--tickers`/`--limit-days`) without duplicating rows.
+Reddit payloads are rendered in memory and batch-upserted in one transaction, preventing
+a partial Reddit refresh; rerunning refreshes existing rows. The evaluation run writes only under `output/eval/`
 and uses an isolated lessons directory there, so it never disturbs ordinary
 `output/<ticker>_<date>/` run artifacts; delete `output/eval/` to start a clean
 evaluation. If the build is interrupted after the gate passes, rerun it — completed
@@ -1009,6 +1035,7 @@ In `src/trading_agents/evaluation/dataset.py`:
         def close_series(self, symbol: str) -> list[tuple[str, float]]: ...
         def transaction_days(self) -> list[str]: ...
         def put_tool_output(self, tool_name: str, ticker: str, as_of_date: str, payload: str) -> None: ...
+        def put_tool_outputs(self, rows: list[tuple[str, str, str, str]]) -> None: ...
         def put_prices(self, symbol: str, rows: list[tuple[str, float]]) -> None: ...
 
 In `src/trading_agents/evaluation/backtest.py`:
@@ -1107,3 +1134,9 @@ ready. This revision records complete row coverage and the absence of stored API
 but adds remediation work for Reddit no-data rows, indicator warm-up blanks,
 point-in-time-unsafe fundamentals/statements, future or unrelated news contamination,
 and future-dated raw Reddit rows.
+
+Revision Note: 2026-07-17 Replaced Reddit engagement filtering with upstream recent-post
+selection, added upstream named empty-subreddit and aggregate empty messages, and
+atomically rebuilt all 183 canonical Reddit payloads. This resolves the six misleading
+GOOGL no-data outputs while preserving score/comment metadata for display. The remaining
+dataset-readiness findings are unchanged.

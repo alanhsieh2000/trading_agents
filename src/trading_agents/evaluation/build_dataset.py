@@ -660,7 +660,7 @@ def build_reddit_outputs(
         )
     dataset.put_reddit_posts([_reddit_post_row(post) for post in posts])
 
-    payloads_written = 0
+    payload_rows: list[tuple[str, str, str, str]] = []
     for symbol in symbols:
         symbol_posts = [post for post in posts if post.ticker == symbol]
         for as_of_date in transaction_days:
@@ -671,20 +671,16 @@ def build_reddit_outputs(
                 subreddits=subreddits,
                 lookback_days=options.lookback_days,
                 limit_per_sub=options.reddit_limit_per_sub,
-                min_score=(settings.sentiment.reddit_min_score if archive else None),
-                min_comments=(
-                    settings.sentiment.reddit_min_comments if archive else None
-                ),
             )
-            dataset.put_tool_output("fetch_reddit_posts", symbol, as_of_date, payload)
-            payloads_written += 1
+            payload_rows.append(("fetch_reddit_posts", symbol, as_of_date, payload))
+    dataset.put_tool_outputs(payload_rows)
 
     return RedditBuildResult(
         tool_name="fetch_reddit_posts",
         symbols=symbols,
         subreddits=subreddits,
         posts_written=len(posts),
-        payloads_written=payloads_written,
+        payloads_written=len(payload_rows),
         transaction_days=tuple(transaction_days),
         lookback_days=options.lookback_days,
         payload_limit_per_sub=options.reddit_limit_per_sub,
@@ -1082,8 +1078,6 @@ def render_reddit_payload(
     subreddits: Sequence[str],
     lookback_days: int,
     limit_per_sub: int,
-    min_score: int | None = None,
-    min_comments: int | None = None,
 ) -> str:
     """Render the small prompt payload from the full raw Reddit buffer."""
     symbol = ticker.upper().strip()
@@ -1101,14 +1095,6 @@ def render_reddit_payload(
                 if post.ticker == symbol
                 and post.subreddit == subreddit
                 and start_date <= post.published_date <= end_date
-                and (
-                    min_score is None
-                    or (post.score is not None and post.score > min_score)
-                )
-                and (
-                    min_comments is None
-                    or (post.num_comments is not None and post.num_comments > min_comments)
-                )
             ),
             key=lambda post: post.published_at,
             reverse=True,
@@ -1116,7 +1102,10 @@ def render_reddit_payload(
         selected = matching[:effective_limit]
         total_posts += len(selected)
         if not selected:
-            blocks.append(f"r/{subreddit}: ")
+            blocks.append(
+                f"r/{subreddit}: <no posts found mentioning "
+                f"{symbol} in the past 7 days>"
+            )
             continue
 
         has_engagement = all(
@@ -1141,7 +1130,11 @@ def render_reddit_payload(
         blocks.append("\n".join(lines))
 
     if total_posts == 0:
-        return f"No data available for Reddit posts for {symbol}."
+        subreddit_names = ", ".join(f"r/{subreddit}" for subreddit in subreddits)
+        return (
+            f"<no Reddit posts found mentioning {symbol} across "
+            f"{subreddit_names} in the past 7 days>"
+        )
     return "\n\n".join(blocks)
 
 

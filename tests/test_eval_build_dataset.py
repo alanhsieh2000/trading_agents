@@ -498,6 +498,11 @@ def test_validate_arctic_shift_coverage_rejects_short_archive(tmp_path):
 
 def test_build_reddit_outputs_uses_arctic_shift_without_network(monkeypatch, tmp_path):
     raw_dir = _complete_arctic_archive(tmp_path)
+    stocks_path = raw_dir / "AAPL-stocks-1.json"
+    stocks_page = json.loads(stocks_path.read_text())
+    stocks_page["data"][-1]["score"] = 0
+    stocks_page["data"][-1]["num_comments"] = 0
+    stocks_path.write_text(json.dumps(stocks_page))
     monkeypatch.setattr(build_dataset, "ARCTIC_SHIFT_RAW_DIR", raw_dir)
 
     def unexpected_network(**_kwargs):
@@ -535,6 +540,7 @@ def test_build_reddit_outputs_uses_arctic_shift_without_network(monkeypatch, tmp
     assert result.posts_written == 6
     assert "scores/comments unavailable" not in payload
     assert "[2024-01-05 ·   10↑ ·   5c] title" in payload
+    assert "[2024-01-05 ·    0↑ ·   0c] title stocks-new" in payload
     assert rows[-1]["score"] == "10"
     assert rows[-1]["num_comments"] == "5"
 

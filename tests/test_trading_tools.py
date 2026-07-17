@@ -345,7 +345,10 @@ def test_reddit_degrades_when_rss_fetch_fails(monkeypatch):
 
     monkeypatch.setattr(sentiment, "urlopen", fake_urlopen)
 
-    assert fetch_reddit_posts("AAPL", inter_request_delay=0) == "No data available for Reddit posts for AAPL."
+    assert fetch_reddit_posts("AAPL", inter_request_delay=0) == (
+        "<no Reddit posts found mentioning AAPL across r/wallstreetbets, "
+        "r/stocks, r/investing in the past 7 days>"
+    )
 
 
 def test_reddit_fetches_rss_first_and_omits_unavailable_metrics(monkeypatch):
@@ -484,11 +487,11 @@ def test_sentiment_helpers_match_upstream_success_formats(monkeypatch):
             },
             {
                 "subreddit_name_prefixed": "r/stocks",
-                "title": "Low quality AAPL thread",
+                "title": "Low engagement AAPL thread",
                 "score": 4,
                 "num_comments": 5,
                 "created_utc": now - 60,
-                "selftext": "Should be filtered out",
+                "selftext": "Still recent",
             },
             {
                 "subreddit_name_prefixed": "r/stocks",
@@ -519,9 +522,11 @@ def test_sentiment_helpers_match_upstream_success_formats(monkeypatch):
         f"[2024-01-02T12:10:00Z · @long_user · no-label] {trimmed_stocktwits_body}"
     )
     assert reddit == (
-        "r/stocks — 1 recent posts mentioning AAPL:\n"
+        "r/stocks — 2 recent posts mentioning AAPL:\n"
         " [2023-11-14 ·    8↑ ·   5c] AAPL earnings thread\n"
-        f" body excerpt: {trimmed_reddit_body}"
+        f" body excerpt: {trimmed_reddit_body}\n"
+        " [2023-11-14 ·    4↑ ·   5c] Low engagement AAPL thread\n"
+        " body excerpt: Still recent"
     )
 
 
@@ -548,7 +553,7 @@ def test_stocktwits_uses_settings_defaults_when_args_omitted(monkeypatch):
     assert captured["timeout"] == 1.5
 
 
-def test_reddit_uses_settings_defaults_for_fetch_and_filtering(monkeypatch):
+def test_reddit_uses_settings_defaults_for_fetch_and_recency(monkeypatch):
     now = 1_700_000_000
     calls = []
 
@@ -561,8 +566,6 @@ def test_reddit_uses_settings_defaults_for_fetch_and_filtering(monkeypatch):
                 reddit_limit_per_sub=2,
                 reddit_timeout=1.25,
                 reddit_inter_request_delay=0.0,
-                reddit_min_score=10,
-                reddit_min_comments=6,
                 reddit_recency_window_seconds=600,
             )
         ),
@@ -579,11 +582,11 @@ def test_reddit_uses_settings_defaults_for_fetch_and_filtering(monkeypatch):
                 "selftext": "kept",
             },
             {
-                "title": f"{subreddit} filtered",
+                "title": f"{subreddit} low engagement",
                 "score": 9,
                 "num_comments": 7,
                 "created_utc": now - 60,
-                "selftext": "filtered",
+                "selftext": "still recent",
             },
         ]
 
@@ -593,6 +596,29 @@ def test_reddit_uses_settings_defaults_for_fetch_and_filtering(monkeypatch):
     result = fetch_reddit_posts("AAPL")
 
     assert calls == [("AAPL", "alpha", 2, 1.25), ("AAPL", "beta", 2, 1.25)]
-    assert "r/alpha — 1 recent posts mentioning AAPL:" in result
-    assert "alpha filtered" not in result
-    assert "r/beta — 1 recent posts mentioning AAPL:" in result
+    assert "r/alpha — 2 recent posts mentioning AAPL:" in result
+    assert "alpha low engagement" in result
+    assert "r/beta — 2 recent posts mentioning AAPL:" in result
+
+
+def test_reddit_names_an_empty_subreddit_in_a_mixed_result(monkeypatch):
+    now = 1_700_000_000
+
+    def fake_fetch_posts(query, subreddit, limit, timeout):
+        if subreddit == "stocks":
+            return [{"title": "recent", "created_utc": now - 60}]
+        return []
+
+    monkeypatch.setattr(sentiment, "_fetch_subreddit_posts", fake_fetch_posts)
+    monkeypatch.setattr(sentiment.time, "time", lambda: now)
+
+    result = fetch_reddit_posts(
+        "googl",
+        subreddits=("stocks", "investing"),
+        inter_request_delay=0,
+    )
+
+    assert "r/stocks — 1 recent posts mentioning GOOGL:" in result
+    assert result.endswith(
+        "r/investing: <no posts found mentioning GOOGL in the past 7 days>"
+    )

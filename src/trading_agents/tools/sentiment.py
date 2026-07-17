@@ -115,18 +115,19 @@ def fetch_reddit_posts(
         posts = [
             post
             for post in posts
-            if _is_quality_recent_reddit_post(
+            if _is_recent_reddit_post(
                 post,
                 now=now,
-                min_score=settings.reddit_min_score,
-                min_comments=settings.reddit_min_comments,
                 recency_window_seconds=settings.reddit_recency_window_seconds,
             )
         ][:effective_limit]
         total_posts += len(posts)
 
         if not posts:
-            blocks.append(f"r/{subreddit}: ")
+            blocks.append(
+                f"r/{subreddit}: <no posts found mentioning "
+                f"{clean_query.upper()} in the past 7 days>"
+            )
             continue
 
         via_rss = any(post.get("source") == "rss" for post in posts)
@@ -153,7 +154,11 @@ def fetch_reddit_posts(
         blocks.append("\n".join(lines))
 
     if total_posts == 0:
-        return f"No data available for Reddit posts for {clean_query}."
+        subreddit_names = ", ".join(f"r/{subreddit}" for subreddit in effective_subreddits)
+        return (
+            f"<no Reddit posts found mentioning {clean_query.upper()} across "
+            f"{subreddit_names} in the past 7 days>"
+        )
 
     return "\n\n".join(blocks)
 
@@ -269,11 +274,9 @@ def _fetch_subreddit_rss(
     return posts
 
 
-def _is_quality_recent_reddit_post(
+def _is_recent_reddit_post(
     post: dict[str, Any],
     now: float,
-    min_score: int,
-    min_comments: int,
     recency_window_seconds: int,
 ) -> bool:
     created = post.get("created_utc")
@@ -283,14 +286,7 @@ def _is_quality_recent_reddit_post(
         return False
     if not now - recency_window_seconds <= created_timestamp <= now:
         return False
-    if post.get("source") == "rss" and (
-        post.get("score") is None or post.get("num_comments") is None
-    ):
-        return True
-    return (
-        _as_int(post.get("score")) > min_score
-        and _as_int(post.get("num_comments")) > min_comments
-    )
+    return True
 
 
 def _parse_atom_timestamp(value: str | None) -> float | None:
