@@ -22,6 +22,9 @@ ALLOWED_INDICATORS = {
     "vwma",
 }
 
+INDICATOR_WARMUP_YEARS = 5
+INDICATOR_MIN_WARMUP_ROWS = 200
+
 
 class StockDataInput(BaseModel):
     """Input schema for stock price history."""
@@ -137,18 +140,49 @@ def get_indicators_text(
         )
 
     try:
-        history = yf.download(
-            symbol,
-            start=start_date,
-            end=end_date,
-            progress=False,
-            auto_adjust=False,
-        )
+        history = download_indicator_history(symbol, start_date, end_date)
     except Exception as exc:
         return (
             f"No price data available for {symbol} between {start_date} and {end_date}. "
             f"Upstream error: {exc}"
         )
+
+    return render_indicators_text(symbol, start_date, end_date, requested, history)
+
+
+def indicator_calculation_start_date(start_date: str) -> str:
+    """Return the five-year history boundary used to warm indicator values."""
+    return (
+        pd.Timestamp(start_date) - pd.DateOffset(years=INDICATOR_WARMUP_YEARS)
+    ).date().isoformat()
+
+
+def download_indicator_history(
+    ticker: str,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """Download OHLCV history including the indicator calculation warm-up."""
+    symbol = ticker.upper().strip()
+    return yf.download(
+        symbol,
+        start=indicator_calculation_start_date(start_date),
+        end=end_date,
+        progress=False,
+        auto_adjust=False,
+    )
+
+
+def render_indicators_text(
+    ticker: str,
+    start_date: str,
+    end_date: str,
+    indicators: list[str] | tuple[str, ...],
+    history: pd.DataFrame,
+) -> str:
+    """Calculate on warmed OHLCV history and render only the requested window."""
+    symbol = ticker.upper().strip()
+    requested = _normalise_indicator_names(list(indicators))
 
     if history is None or history.empty:
         return f"No price data available for {symbol} between {start_date} and {end_date}."
@@ -159,7 +193,16 @@ def get_indicators_text(
     if missing:
         return f"Cannot compute indicators for {symbol}: missing columns {', '.join(missing)}."
 
-    stock_df = prices.set_index("date")[["open", "high", "low", "close", "volume"]].copy()
+    calculation_start = indicator_calculation_start_date(start_date)
+    calculation_prices = prices[
+        (prices["date"] >= calculation_start) & (prices["date"] < end_date)
+    ]
+    if calculation_prices.empty:
+        return f"No price data available for {symbol} between {start_date} and {end_date}."
+
+    stock_df = calculation_prices.set_index("date")[
+        ["open", "high", "low", "close", "volume"]
+    ].copy()
     stock_df = StockDataFrame.retype(stock_df)
     for indicator in requested:
         stock_df[indicator]
@@ -169,6 +212,9 @@ def get_indicators_text(
         output = output.rename(columns={output.columns[0]: "date"})
     output = output[["date", "close", *requested]]
     output["date"] = pd.to_datetime(output["date"]).dt.strftime("%Y-%m-%d")
+    output = output[(output["date"] >= start_date) & (output["date"] < end_date)]
+    if output.empty:
+        return f"No price data available for {symbol} between {start_date} and {end_date}."
 
     return (
         f"Technical indicators for {symbol} from {start_date} to {end_date}.\n"

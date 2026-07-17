@@ -35,9 +35,11 @@ from trading_agents.evaluation.reddit_coverage import (
 from trading_agents.tools.fundamentals import get_fundamentals_text, get_statement_text
 from trading_agents.tools.market_data import (
     ALLOWED_INDICATORS,
+    INDICATOR_MIN_WARMUP_ROWS,
     _normalise_price_history,
-    get_indicators_text,
+    download_indicator_history,
     get_stock_data_text,
+    render_indicators_text,
 )
 
 
@@ -403,22 +405,86 @@ def build_indicator_outputs(
     """Record replayable ``get_indicators`` payloads for each ticker and day."""
     symbols = _symbols_for_indicator_outputs(options)
     indicators = indicator_names_for_dataset()
-    payloads_written = 0
+    if not transaction_days:
+        return ToolOutputBuildResult(
+            tool_name="get_indicators",
+            symbols=symbols,
+            payloads_written=0,
+            transaction_days=(),
+            lookback_days=options.lookback_days,
+        )
 
+    earliest_display_start = _lookback_start_date(
+        min(transaction_days), options.lookback_days
+    )
+    latest_end_date = max(transaction_days)
+    payload_rows: list[tuple[str, str, str, str]] = []
     for symbol in symbols:
+        try:
+            history = download_indicator_history(
+                symbol,
+                earliest_display_start,
+                latest_end_date,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Could not download indicator history for {symbol}: {exc}"
+            ) from exc
+        _validate_indicator_warmup(symbol, history, earliest_display_start)
+
         for as_of_date in transaction_days:
             start_date = _lookback_start_date(as_of_date, options.lookback_days)
-            payload = get_indicators_text(symbol, start_date, as_of_date, indicators)
-            dataset.put_tool_output("get_indicators", symbol, as_of_date, payload)
-            payloads_written += 1
+            payload = render_indicators_text(
+                symbol,
+                start_date,
+                as_of_date,
+                indicators,
+                history,
+            )
+            if not payload.startswith("Technical indicators for "):
+                raise RuntimeError(
+                    f"Could not render indicators for {symbol} on {as_of_date}: {payload}"
+                )
+            payload_rows.append(("get_indicators", symbol, as_of_date, payload))
+
+    dataset.put_tool_outputs(payload_rows)
 
     return ToolOutputBuildResult(
         tool_name="get_indicators",
         symbols=symbols,
-        payloads_written=payloads_written,
+        payloads_written=len(payload_rows),
         transaction_days=tuple(transaction_days),
         lookback_days=options.lookback_days,
     )
+
+
+def _validate_indicator_warmup(
+    symbol: str,
+    history: pd.DataFrame,
+    earliest_display_start: str,
+) -> None:
+    if history is None or history.empty:
+        raise RuntimeError(f"Indicator history for {symbol} is empty.")
+    prices = _normalise_price_history(history, symbol)
+    required = {"open", "high", "low", "close", "volume"}
+    missing = sorted(required - set(prices.columns))
+    if missing:
+        raise RuntimeError(
+            f"Indicator history for {symbol} is missing columns: {', '.join(missing)}."
+        )
+    display_rows = prices[prices["date"] >= earliest_display_start]
+    if display_rows.empty:
+        raise RuntimeError(
+            f"Indicator history for {symbol} has no rows on or after "
+            f"{earliest_display_start}."
+        )
+    first_display_date = str(display_rows.iloc[0]["date"])
+    warmup_rows = len(prices[prices["date"] <= first_display_date])
+    if warmup_rows < INDICATOR_MIN_WARMUP_ROWS:
+        raise RuntimeError(
+            f"Indicator history for {symbol} has {warmup_rows} rows through "
+            f"{first_display_date}; at least {INDICATOR_MIN_WARMUP_ROWS} are required."
+        )
 
 
 def build_news_outputs(

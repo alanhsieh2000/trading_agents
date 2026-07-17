@@ -1,3 +1,5 @@
+from io import StringIO
+
 import pandas as pd
 from urllib.error import URLError
 
@@ -91,10 +93,22 @@ def test_indicators_reject_invalid_name_without_download(monkeypatch):
 
 
 def test_indicators_format_requested_values(monkeypatch):
+    calls = {}
+
+    def fake_download(ticker, start, end, progress, auto_adjust):
+        calls.update(
+            ticker=ticker,
+            start=start,
+            end=end,
+            progress=progress,
+            auto_adjust=auto_adjust,
+        )
+        return _price_history(30)
+
     monkeypatch.setattr(
         market_data.yf,
         "download",
-        lambda *args, **kwargs: _price_history(30),
+        fake_download,
     )
 
     result = get_indicators._run(
@@ -140,6 +154,44 @@ def test_indicators_format_requested_values(monkeypatch):
         "2024-01-29,130,125.5864,100\n"
         "2024-01-30,131,126.5731,100"
     )
+    assert calls == {
+        "ticker": "AAPL",
+        "start": "2019-01-01",
+        "end": "2024-02-01",
+        "progress": False,
+        "auto_adjust": False,
+    }
+
+
+def test_indicators_use_warmup_history_then_trim_to_requested_window():
+    dates = pd.bdate_range(end="2024-01-10", periods=240)
+    values = pd.Series(range(1, len(dates) + 1), dtype=float).to_numpy()
+    history = pd.DataFrame(
+        {
+            "Open": values + 100,
+            "High": values + 102,
+            "Low": values + 99,
+            "Close": values + 101,
+            "Volume": values * 100 + 1000,
+        },
+        index=dates,
+    )
+
+    result = market_data.render_indicators_text(
+        "AAPL",
+        "2024-01-02",
+        "2024-01-06",
+        ("boll", "boll_lb", "boll_ub", "close_200_sma"),
+        history,
+    )
+    csv = pd.read_csv(StringIO(result.split("\n", 3)[3]))
+
+    assert list(csv["date"]) == ["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"]
+    assert pd.notna(csv.iloc[0]["boll_lb"])
+    assert pd.notna(csv.iloc[0]["boll_ub"])
+    first_date = pd.Timestamp(csv.iloc[0]["date"])
+    expected_sma = history.loc[:first_date, "Close"].tail(200).mean()
+    assert csv.iloc[0]["close_200_sma"] == expected_sma
 
 
 def test_fundamentals_profile_reports_missing_fields(monkeypatch):

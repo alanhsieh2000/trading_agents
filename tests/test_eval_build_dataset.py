@@ -206,14 +206,22 @@ def test_indicator_names_for_dataset_collects_all_allowed_indicators():
 def test_build_indicator_outputs_writes_tickers_only_with_all_indicators(
     monkeypatch, tmp_path
 ):
-    calls = []
+    download_calls = []
+    render_calls = []
 
-    def fake_get_indicators_text(ticker, start_date, end_date, indicators):
-        calls.append((ticker, start_date, end_date, tuple(indicators)))
-        return f"{ticker} {start_date} {end_date} {len(indicators)}"
+    def fake_download_indicator_history(ticker, start_date, end_date):
+        download_calls.append((ticker, start_date, end_date))
+        return _price_history("2025-01-01", 340)
+
+    def fake_render_indicators_text(ticker, start_date, end_date, indicators, history):
+        render_calls.append((ticker, start_date, end_date, tuple(indicators), id(history)))
+        return f"Technical indicators for {ticker} {start_date} {end_date} {len(indicators)}"
 
     monkeypatch.setattr(
-        build_dataset, "get_indicators_text", fake_get_indicators_text
+        build_dataset, "download_indicator_history", fake_download_indicator_history
+    )
+    monkeypatch.setattr(
+        build_dataset, "render_indicators_text", fake_render_indicators_text
     )
     options = build_dataset.BuildDatasetOptions(
         dataset_path=str(tmp_path / "eval.duckdb"),
@@ -238,18 +246,40 @@ def test_build_indicator_outputs_writes_tickers_only_with_all_indicators(
         googl_payload = dataset.tool_output("get_indicators", "GOOGL", "2025-12-03")
 
     all_indicators = build_dataset.indicator_names_for_dataset()
-    assert calls == [
+    assert download_calls == [
+        ("AAPL", "2025-11-29", "2025-12-03"),
+        ("GOOGL", "2025-11-29", "2025-12-03"),
+    ]
+    assert [call[:4] for call in render_calls] == [
         ("AAPL", "2025-11-29", "2025-12-02", all_indicators),
         ("AAPL", "2025-11-30", "2025-12-03", all_indicators),
         ("GOOGL", "2025-11-29", "2025-12-02", all_indicators),
         ("GOOGL", "2025-11-30", "2025-12-03", all_indicators),
     ]
+    assert render_calls[0][4] == render_calls[1][4]
+    assert render_calls[2][4] == render_calls[3][4]
     assert result.tool_name == "get_indicators"
     assert result.symbols == ("AAPL", "GOOGL")
     assert result.payloads_written == 4
     assert result.lookback_days == 3
-    assert aapl_payload == f"AAPL 2025-11-29 2025-12-02 {len(all_indicators)}"
-    assert googl_payload == f"GOOGL 2025-11-30 2025-12-03 {len(all_indicators)}"
+    assert aapl_payload == (
+        f"Technical indicators for AAPL 2025-11-29 2025-12-02 {len(all_indicators)}"
+    )
+    assert googl_payload == (
+        f"Technical indicators for GOOGL 2025-11-30 2025-12-03 {len(all_indicators)}"
+    )
+
+
+def test_validate_indicator_warmup_rejects_fewer_than_200_rows():
+    history = _price_history("2023-01-01", 199)
+    first_display_date = history.index[-1].date().isoformat()
+
+    with pytest.raises(RuntimeError, match="at least 200 are required"):
+        build_dataset._validate_indicator_warmup(
+            "AAPL",
+            history,
+            first_display_date,
+        )
 
 
 def test_build_news_outputs_writes_tickers_only_with_doubled_limit(monkeypatch, tmp_path):
@@ -1113,9 +1143,14 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
     )
     monkeypatch.setattr(
         build_dataset,
-        "get_indicators_text",
-        lambda ticker, start_date, end_date, indicators: (
-            f"{ticker} {start_date} {end_date} {len(indicators)}"
+        "download_indicator_history",
+        lambda ticker, start_date, end_date: _price_history("2025-01-01", 365),
+    )
+    monkeypatch.setattr(
+        build_dataset,
+        "render_indicators_text",
+        lambda ticker, start_date, end_date, indicators, history: (
+            f"Technical indicators for {ticker} {start_date} {end_date} {len(indicators)}"
         ),
     )
     monkeypatch.setattr(

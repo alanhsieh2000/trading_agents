@@ -46,6 +46,7 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [x] (2026-06-17 00:00Z) Implemented the shared price-table and trading-day calendar build in `build_dataset.py`: write close prices for the selected evaluation tickers and the default benchmark ticker, SPY, before recording per-tool payloads.
 - [x] (2026-06-17 06:37Z) Implemented and populated shared dataset building for `get_stock_data`: recorded the market-data text block for each evaluation ticker and for SPY on each trading day using the same lookback window the analyst stage will request; SPY history is required by the portfolio manager's self-reflection and benchmark-relative realized-return calculations. Wrote 244 persistent `get_stock_data` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, SPY 61.
 - [x] (2026-06-17) Implemented and populated dataset building for `get_indicators`: records all allowed indicators from `src/trading_agents/tools/market_data.py` for each configured ticker and trading day using the analyst-stage lookback window. Wrote 183 persistent `get_indicators` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero SPY indicator rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison matched for `AMZN` on `2024-02-27` with 12 indicators.
+- [x] (2026-07-17 14:36Z) Corrected live and replay indicator warm-up: calculations now use five years of pre-window OHLCV and trim output back to the requested seven-day range. The builder downloads once per ticker, requires at least 200 observations through the first displayed date, renders all replacements before an atomic write, and regenerated all 183 indicator payloads. The audit found zero blank indicator cells, boundary errors, row-count errors, or fresh-render mismatches; focused validation reports 74 passed and the full suite reports 192 passed.
 - [x] (2026-06-17 13:03Z) Implemented and populated shared dataset building for `get_news`: records ticker-news text through the Exa historical source layer with the same markdown/no-news/error contract as the live Yahoo-backed tool. The builder uses a doubled news limit (`settings.news.ticker_limit * 2`, currently 40) for buffer coverage, writes ticker rows only, and shares the same implementation with Plan B. Wrote 183 persistent `get_news` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AMZN on `2024-03-05`; the evaluation-backed `get_news` tool matched the DuckDB payload exactly and returned 39 articles for `2024-02-27..2024-03-05`.
 - [x] (2026-06-17) Implemented and populated shared dataset building for `get_global_news`: records one Exa historical global-market-news payload per trading day, stores it under each evaluated ticker key for existing dataset-backed tool replay, and uses a doubled global-news limit (`settings.news.global_limit * 2`, currently 20). Wrote 183 persistent `get_global_news` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-21`; the evaluation-backed `get_global_news` tool matched the DuckDB payload exactly and returned the shared global payload for all ticker keys on that date.
 - [x] (2026-07-17 07:40Z) Implemented canonical dataset building for `fetch_reddit_posts`: validates all retained Arctic Shift pages and required fields, requires every configured ticker/subreddit stream and full replay-window coverage, deduplicates by ticker/post ID, and renders rich date/score/comment/title/body payloads without network calls. Extended raw Reddit rows to retain source IDs and engagement counts. Ingested 1,051 unique posts and 183 tool payloads into `data/eval_dataset.duckdb` (61 each for AAPL, GOOGL, and AMZN). Focused tests reported 37 passed.
@@ -66,16 +67,15 @@ makes the evaluation reproducible and offline (apart from the language-model cal
   1,051 raw Reddit rows for missing records, no-data fallbacks, stored HTTP/API errors,
   time bounds, malformed payloads, and suspicious future content. Key coverage is
   complete and no stored API/runtime errors were found, but the dataset is not ready:
-  every indicator row has two Bollinger-band warm-up blanks; current fundamentals and
-  2024/2025 financial statements leak post-trade
+  current fundamentals and 2024/2025 financial statements leak post-trade
   information into all replay dates; confirmed future/unrelated ticker and global news
   contaminates multiple rows; and 133 unused GOOGL raw Reddit posts are dated in
   2025-12-19..2026-02-13.
 - [ ] (pending) Resolve the dataset-readiness audit findings before the smoke evaluation:
   replace or explicitly remove point-in-time-unsafe fundamentals/statements, repair or
-  exclude contaminated news blocks, decide how to represent indicator warm-up values,
-  and remove future raw Reddit rows from the canonical artifact. The Reddit replay-output
-  finding is resolved; the future raw-row cleanup remains separate.
+  exclude contaminated news blocks, and remove future raw Reddit rows from the canonical
+  artifact. The Reddit replay-output and indicator warm-up findings are resolved; the
+  future raw-row cleanup remains separate.
 - [ ] (pending) Run the full evaluation and record CR per stock in `Outcomes & Retrospective`.
 
 Use timestamps (for example `(2026-06-11 09:00Z)`) when checking items off so a
@@ -124,13 +124,16 @@ future contributor can gauge the rate of progress.
   point-in-time and content-quality defects in `data/eval_dataset.duckdb`.
   Evidence: all 1,891 expected tool keys and all 364 expected positive price rows are
   present, with no stored HTTP/API/runtime errors. The six GOOGL Reddit payloads originally
-  appeared as no-data fallbacks; all 183 indicator payloads have blank first-row `boll_lb` and
-  `boll_ub`; all 183 current-fundamentals rows and all 549 financial-statement rows use
+  appeared as no-data fallbacks, and all 183 indicator payloads originally had blank
+  first-row `boll_lb` and `boll_ub`; all 183 current-fundamentals rows and all 549
+  financial-statement rows use
   snapshots unavailable on their 2024-Q1 trade dates; at least 29 ticker-news rows and
   18 replicated global-news rows contain confirmed future/unrelated material; and the
   raw Reddit table retains 133 GOOGL posts from late 2025/early 2026. The Reddit payload
   finding was resolved on 2026-07-17 by removing obsolete engagement filtering and
-  rebuilding every Reddit output; the remaining findings still block readiness.
+  rebuilding every Reddit output. The indicator finding was resolved the same day with
+  five years of calculation warm-up and a complete replay refresh; the remaining findings
+  still block readiness.
 - Observation: The original TradingAgents repository works around Reddit JSON
   blocking by using Reddit RSS/Atom search first.
   Evidence: `https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/dataflows/reddit.py`
@@ -318,6 +321,16 @@ is ideal).
   `AND` gate mislabeled six GOOGL windows as having no data despite archived posts. Shared
   live/replay semantics and an atomic full-payload rebuild prevent that drift from
   recurring while Arctic Shift still supplies score/comment metadata for display.
+  Date/Author: 2026-07-17 / Codex (confirmed with the user)
+
+- Decision: Calculate every technical indicator with five years of pre-window OHLCV,
+  then trim the rendered CSV to the requested analyst lookback.
+  Rationale: `stockstats` uses a 20-session rolling sample standard deviation for
+  Bollinger bands, so calculating directly on the display slice leaves the first bands
+  undefined. A 200-session minimum would fully cover fixed windows, but EMA, MACD, RSI,
+  and ATR are recursive and benefit from a longer initialization period. Five years
+  matches upstream's history-depth policy, does not expose warm-up rows or future prices,
+  and was selected by the user over shorter warm-up alternatives.
   Date/Author: 2026-07-17 / Codex (confirmed with the user)
 
 - Decision: Treat `data/raw-backtest/stocktwits/` as an immutable, auditable input
@@ -572,6 +585,18 @@ remain. The 1,708 unrelated tool outputs retained SHA-256
 `ffed0472b518d639728e1c682ad7c244c981f269cb4c949b4b7f5cbdb39afbf1` before and after,
 focused validation reported 80 passed, and the full suite reported 190 passed.
 
+Milestone 12 — Five-year indicator warm-up and full replay refresh (2026-07-17).
+Refactored `get_indicators_text()` into shared history acquisition and rendering steps.
+Live calls fetch five years before the requested start; the renderer calculates on that
+history and emits only `[start_date, end_date)`. The dataset builder reuses one OHLCV
+download per ticker for all 61 dates, validates at least 200 observations through the
+first displayed date, renders all 183 rows before an atomic batch upsert, and rejects
+failed payloads before writing. All 183 stored indicator payloads changed. The audit
+reported zero blank requested-indicator cells, date-boundary violations, row-count
+errors, or fresh-render mismatches. The 1,708 unrelated tool outputs retained SHA-256
+`fc7d6d954df69d71e924cab384d1929744d07693c33479fb117574230a03f83a` before and after;
+focused validation reported 74 passed and the full suite reported 192 passed.
+
 
 ## Context and Orientation
 
@@ -594,7 +619,7 @@ stage's output into the next stage.
 
 The ten data tools used by the analyst stage are:
 
-- `get_stock_data`, `get_indicators` in `src/trading_agents/tools/market_data.py` (the underlying functions are `get_stock_data_text(ticker, start_date, end_date)` and `get_indicators_text(ticker, start_date, end_date, indicators)`; both use `yf.download`).
+- `get_stock_data`, `get_indicators` in `src/trading_agents/tools/market_data.py` (the underlying functions are `get_stock_data_text(ticker, start_date, end_date)` and `get_indicators_text(ticker, start_date, end_date, indicators)`). Stock data downloads the requested range; indicators download five years of pre-window OHLCV, calculate on the full history, and render only the requested range.
 - `get_news`, `get_global_news` in `src/trading_agents/tools/news.py` (use `yf.Ticker(...).news`; the helper `_format_news_block(heading, records)` renders the output text).
 - `fetch_reddit_posts`, `fetch_stocktwits_messages` in `src/trading_agents/tools/sentiment.py` (plain functions, not CrewAI tools; they hit Reddit and StockTwits HTTP endpoints).
 - `get_fundamentals`, `get_balance_sheet`, `get_cashflow`, `get_income_statement` in `src/trading_agents/tools/fundamentals.py` (use `yf.Ticker(...).info` and the financial-statement attributes).
@@ -644,7 +669,7 @@ Definitions used in this plan:
 
 Audited against the backtest window, queried from 2026:
 
-- Prices and indicators are fully available historically (`yf.download(start, end)`), so the builder can record them by calling the existing `get_stock_data_text` / `get_indicators_text`.
+- Prices and indicators are fully available historically through yfinance. Stock-price payloads use the requested range. Indicator payloads require five years of pre-window OHLCV so long-window and recursive calculations are initialized before the first displayed row; the builder downloads one reusable history per ticker and renders only the analyst lookback window for each trade date.
 - Financial statements return real filings but yfinance keeps only ~4 recent periods, so some 2023-2024 quarters may have rolled off; `get_fundamentals` (`.info`) is a current snapshot, not point-in-time. The builder records best-effort current values; SEC EDGAR is noted as a future point-in-time upgrade. This is acceptable because the profile and statement fields are slow-moving context, and the dominant CR drivers are price action and the daily decisions.
 - News (`get_news`, `get_global_news`) is **not** historically queryable through the
   existing tools, so the builder sources it from **Exa** with published-date filters.
@@ -662,12 +687,12 @@ Audited against the backtest window, queried from 2026:
 
 ## Plan of Work
 
-The work is additive: new code lives in a new package `src/trading_agents/evaluation/`,
-and the only edits to existing files are a new settings block, a small tool-injection
-seam in the analyst crew, two new script entry points in `pyproject.toml`, a pointer
-edit in the end-to-end-flow plan (`plans/08_end_to_end_flow.md`), and an `EXA_API_KEY`
-note in the README. Live behavior is unchanged unless `settings.evaluation.enabled` is
-true.
+Most evaluation code lives in `src/trading_agents/evaluation/`, with integration edits
+in settings, the analyst crew, script entry points, the README, and the end-to-end-flow
+plan. Evaluation routing remains inactive unless `settings.evaluation.enabled` is true.
+Two data-quality fixes intentionally also affect live tool behavior: Reddit now uses
+recent-post selection and upstream-compatible empty messages, and indicators calculate
+against five years of pre-window history before trimming to the requested output range.
 
 First, extend settings. In `src/trading_agents/config/settings.py`, define
 `EvaluationSettings(BaseModel)` with fields `enabled: bool = False`,
@@ -706,10 +731,13 @@ dataset slice. The builder should download daily closes for each ticker and the
 benchmark over `buffer_start_date … end_date + price_tail_days`, fill `prices`, and
 derive the trading-day list from the benchmark price index within the window. For each
 ticker × trading day, the tool-specific builders record into `tool_outputs` the text
-from `get_stock_data_text`/`get_indicators_text` (called with the same
-`start = trade_date − lookback_days`, `end = trade_date` the eval flow uses), the Exa
-news and global-news blocks, the StockTwits archive-derived block, the Arctic Shift
-archive-derived Reddit block, and
+from `get_stock_data_text` using the analyst display window. For indicators, download
+one five-year-warmed OHLCV superset per ticker, require at least 200 observations through
+the first displayed date, calculate every payload from that shared history, and trim
+each payload to `start = trade_date - lookback_days`, `end = trade_date`. Render and
+validate all indicator payloads before one atomic batch upsert. The remaining records
+come from the Exa news and global-news blocks, the StockTwits archive-derived block, the
+Arctic Shift archive-derived Reddit block, and
 best-effort fundamentals/statement text. Use `EvalDataset.put_prices()` and
 `put_tool_output()` so the build is idempotent. Support `--tickers` and `--limit-days`.
 
@@ -1038,6 +1066,14 @@ In `src/trading_agents/evaluation/dataset.py`:
         def put_tool_outputs(self, rows: list[tuple[str, str, str, str]]) -> None: ...
         def put_prices(self, symbol: str, rows: list[tuple[str, float]]) -> None: ...
 
+In `src/trading_agents/tools/market_data.py`:
+
+    INDICATOR_WARMUP_YEARS = 5
+    INDICATOR_MIN_WARMUP_ROWS = 200
+    def indicator_calculation_start_date(start_date: str) -> str: ...
+    def download_indicator_history(ticker: str, start_date: str, end_date: str) -> pd.DataFrame: ...
+    def render_indicators_text(ticker: str, start_date: str, end_date: str, indicators: list[str], history: pd.DataFrame) -> str: ...
+
 In `src/trading_agents/evaluation/backtest.py`:
 
     def simulate_position(decisions: list[tuple[str, str]], closes: dict[str, float], weight_over: float, weight_under: float) -> "BacktestResult": ...
@@ -1140,3 +1176,10 @@ selection, added upstream named empty-subreddit and aggregate empty messages, an
 atomically rebuilt all 183 canonical Reddit payloads. This resolves the six misleading
 GOOGL no-data outputs while preserving score/comment metadata for display. The remaining
 dataset-readiness findings are unchanged.
+
+Revision Note: 2026-07-17 Added five years of pre-window OHLCV to indicator calculation,
+with one reusable download per ticker and output trimmed to the analyst lookback window.
+Atomically rebuilt all 183 indicator payloads and verified zero blank requested-indicator
+cells, boundary errors, row-count errors, or fresh-render mismatches. This resolves the
+first-row Bollinger blanks and initializes long-window and recursive indicators; the
+remaining dataset-readiness findings are unchanged.
