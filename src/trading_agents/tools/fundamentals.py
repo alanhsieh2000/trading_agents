@@ -1,3 +1,4 @@
+import math
 from typing import Any, Type
 
 import pandas as pd
@@ -78,7 +79,7 @@ def get_fundamentals_text(ticker: str) -> str:
         ("Enterprise value", _format_number(info.get("enterpriseValue"))),
         ("Trailing EPS", _format_number(info.get("trailingEps"))),
         ("Forward EPS", _format_number(info.get("forwardEps"))),
-        ("Dividend yield", _format_number(info.get("dividendYield"))),
+        ("Dividend yield", _format_dividend_yield(info)),
         ("Beta", _format_number(info.get("beta"))),
     ]
     present = [(label, value) for label, value in fields if value not in (None, "")]
@@ -141,6 +142,24 @@ def _format_period(value: object) -> str:
 def _humanise_label(value: object) -> str:
     text = str(value).replace("_", " ").strip()
     return " ".join(text.split())
+
+
+def _format_dividend_yield(info: dict[str, Any]) -> str | None:
+    """Return dividend yield in the percentage-point units used by Yahoo."""
+    for key, multiplier in (
+        ("dividendYield", 1.0),
+        ("trailingAnnualDividendYield", 100.0),
+    ):
+        value = info.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(numeric):
+            return _format_number(numeric * multiplier)
+    return None
 
 
 def _format_number(value: Any) -> str | None:

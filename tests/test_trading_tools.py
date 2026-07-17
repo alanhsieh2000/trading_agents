@@ -222,6 +222,37 @@ def test_fundamentals_profile_reports_missing_fields(monkeypatch):
     )
 
 
+def test_fundamentals_profile_uses_zero_trailing_dividend_yield(monkeypatch):
+    class FakeTicker:
+        info = {
+            "longName": "Amazon.com, Inc.",
+            "symbol": "AMZN",
+            "trailingAnnualDividendYield": 0.0,
+        }
+
+    monkeypatch.setattr(fundamentals.yf, "Ticker", lambda ticker: FakeTicker())
+
+    result = get_fundamentals._run("amzn")
+
+    assert "Dividend yield: 0" in result.splitlines()
+    assert "Missing fields: Dividend yield" not in result
+
+
+def test_dividend_yield_prefers_primary_and_normalises_trailing_ratio():
+    assert (
+        fundamentals._format_dividend_yield(
+            {"dividendYield": 0.36, "trailingAnnualDividendYield": 0.0031}
+        )
+        == "0.36"
+    )
+    assert (
+        fundamentals._format_dividend_yield(
+            {"dividendYield": None, "trailingAnnualDividendYield": 0.0031}
+        )
+        == "0.31"
+    )
+
+
 def test_financial_statement_outputs(monkeypatch):
     class FakeTicker:
         balance_sheet = pd.DataFrame(

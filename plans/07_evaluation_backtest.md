@@ -53,6 +53,7 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [x] (2026-07-17 13:30Z) Aligned live and replay Reddit output with upstream recent-post semantics: removed score/comment quality gates, retained the configurable five-post-per-subreddit default, added upstream named empty-subreddit and all-empty messages, and atomically regenerated all 183 Reddit payloads from the local Arctic Shift archive. All 183 prior payloads changed; all now contain recent posts, 26 named partial-empty blocks remain, and zero old no-data or blank-subreddit blocks remain. The full suite reports 190 passed.
 - [x] (2026-07-17 08:02Z) Implemented canonical dataset building for `fetch_stocktwits_messages`: validates all 21,165 retained pagination pages, their numeric filename sequence, symbol/cursor/message schemas, decreasing cursor bounds, page chronology, duplicate consistency, and full replay-window coverage before writes. Messages are chronologically normalized and rendered in the live sentiment format without StockTwits or Exa calls. Populated 183 payloads in `data/eval_dataset.duckdb` (61 per ticker); every payload contains the configured 30 messages. Focused validation reported 69 passed.
 - [x] Implement dataset building for `get_fundamentals`: record best-effort fundamentals text for each ticker and trading day.
+- [x] (2026-07-17 14:58Z) Corrected AMZN dividend-yield reporting without a ticker-specific exception. The formatter now prefers Yahoo's percentage-point `dividendYield` and falls back to `trailingAnnualDividendYield * 100`; Yahoo's explicit trailing zero therefore renders as `Dividend yield: 0` instead of a missing field. Atomically replaced only the 61 AMZN `get_fundamentals` rows. All 61 contain the zero value, none retain the missing warning, the other 1,830 tool outputs retain SHA-256 `6b7d21158488f67a6927c943969e50ac3a848a5c8362e28b262a11b62c3121e6`, focused validation reports 76 passed, and the full suite reports 194 passed.
 - [x] (2026-06-18 14:16Z) Implemented and populated shared dataset building for `get_balance_sheet`: records the yfinance latest balance-sheet statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_balance_sheet` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-08`; the evaluation-backed `get_balance_sheet` tool matched the live tool exactly and AAPL had one distinct payload across all 61 replay dates.
 - [x] (2026-06-18 14:24Z) Implemented and populated shared dataset building for `get_cashflow`: records the yfinance latest cash flow statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_cashflow` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-01-12`; the evaluation-backed `get_cashflow` tool matched the live tool exactly and each ticker had one distinct payload across all 61 replay dates.
 - [x] (2026-06-18 14:30Z) Implemented and populated shared dataset building for `get_income_statement`: records the yfinance latest income statement once per ticker and writes the same best-effort statement text for each trading day because the live tool is not date-parameterized. Wrote 183 persistent `get_income_statement` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AMZN on `2024-02-28`; the evaluation-backed `get_income_statement` tool matched the live tool exactly and each ticker had one distinct payload across all 61 replay dates.
@@ -596,6 +597,16 @@ reported zero blank requested-indicator cells, date-boundary violations, row-cou
 errors, or fresh-render mismatches. The 1,708 unrelated tool outputs retained SHA-256
 `fc7d6d954df69d71e924cab384d1929744d07693c33479fb117574230a03f83a` before and after;
 focused validation reported 74 passed and the full suite reported 192 passed.
+
+Milestone 13 — AMZN zero-dividend normalization (2026-07-17). Yahoo omits AMZN's
+primary `dividendYield` while returning an explicit zero in
+`trailingAnnualDividendYield`. The live fundamentals formatter now prefers the primary
+percentage-point value and otherwise converts the trailing ratio to percentage points,
+so a confirmed zero is not classified as missing. An atomic targeted refresh replaced
+all 61 AMZN fundamentals payloads and left the other 1,830 tool outputs unchanged at
+SHA-256 `6b7d21158488f67a6927c943969e50ac3a848a5c8362e28b262a11b62c3121e6`.
+Focused validation reported 76 passed and the full suite reported 194 passed. This
+semantic correction does not resolve the separate point-in-time snapshot finding.
 
 
 ## Context and Orientation
@@ -1183,3 +1194,8 @@ Atomically rebuilt all 183 indicator payloads and verified zero blank requested-
 cells, boundary errors, row-count errors, or fresh-render mismatches. This resolves the
 first-row Bollinger blanks and initializes long-window and recursive indicators; the
 remaining dataset-readiness findings are unchanged.
+
+Revision Note: 2026-07-17 Normalized dividend-yield fallback units and atomically
+replaced the 61 AMZN fundamentals payloads. Yahoo's explicit trailing zero now renders
+as `Dividend yield: 0` rather than `Missing fields: Dividend yield`; all unrelated tool
+outputs remained unchanged. Point-in-time-unsafe fundamentals remain pending.
