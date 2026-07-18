@@ -86,6 +86,20 @@ makes the evaluation reproducible and offline (apart from the language-model cal
   Legitimate pre-trade articles discussing future events remain unchanged, and
   `tests/test_eval_dataset.py` reported 11 passed.
 - [x] (2026-06-17) Implemented and populated shared dataset building for `get_global_news`: records one Exa historical global-market-news payload per trading day, stores it under each evaluated ticker key for existing dataset-backed tool replay, and uses a doubled global-news limit (`settings.news.global_limit * 2`, currently 20). Wrote 183 persistent `get_global_news` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-21`; the evaluation-backed `get_global_news` tool matched the DuckDB payload exactly and returned the shared global payload for all ticker keys on that date.
+- [x] (2026-07-18 12:14Z) Repaired the audited unrelated, post-trade-published,
+  and later-injected contamination in canonical `get_global_news` payloads without
+  calling Exa. Removed 11 date-specific article blocks from six shared payloads,
+  replicated across AAPL, AMZN, and GOOGL for 33 complete block removals from 18 rows.
+  The three ticker copies remain byte-identical per date and retain 18 articles on
+  `2024-01-19`, `2024-01-29`, `2024-02-26`, `2024-02-27`, and `2024-03-15`, and 19 on
+  `2024-02-29`. All 1,873 non-target tool-output rows remained byte-identical at
+  SHA-256 `8992fad9d1596dc92774ad5ed4b43690d311fb61ea5de630bc34cc625aca1074`;
+  the 183 ordered `get_global_news` rows hash to
+  `744dfbf89335388497f8e9f114c065dd63c70ec542bb4afdd03770b1038121a9`, and the
+  DuckDB hashes to
+  `385d259f78bd3092d08a2f6d082fbe62c4600b61e833da4de00a5e618c96750c`.
+  Valid future forecasts and all non-target article blocks remain unchanged, and
+  `tests/test_eval_dataset.py` reported 11 passed.
 - [x] (2026-07-17 07:40Z) Implemented canonical dataset building for `fetch_reddit_posts`: validates all retained Arctic Shift pages and required fields, requires every configured ticker/subreddit stream and full replay-window coverage, deduplicates by ticker/post ID, and renders rich date/score/comment/title/body payloads without network calls. Extended raw Reddit rows to retain source IDs and engagement counts. Ingested 1,051 unique posts and 183 tool payloads into `data/eval_dataset.duckdb` (61 each for AAPL, GOOGL, and AMZN). Focused tests reported 37 passed.
 - [x] (2026-07-17 13:30Z) Aligned live and replay Reddit output with upstream recent-post semantics: removed score/comment quality gates, retained the configurable five-post-per-subreddit default, added upstream named empty-subreddit and all-empty messages, and atomically regenerated all 183 Reddit payloads from the local Arctic Shift archive. All 183 prior payloads changed; all now contain recent posts, 26 named partial-empty blocks remain, and zero old no-data or blank-subreddit blocks remain. The full suite reports 190 passed.
 - [x] (2026-07-17 08:02Z) Implemented canonical dataset building for `fetch_stocktwits_messages`: validates all 21,165 retained pagination pages, their numeric filename sequence, symbol/cursor/message schemas, decreasing cursor bounds, page chronology, duplicate consistency, and full replay-window coverage before writes. Messages are chronologically normalized and rendered in the live sentiment format without StockTwits or Exa calls. Populated 183 payloads in `data/eval_dataset.duckdb` (61 per ticker); every payload contains the configured 30 messages. Focused validation reported 69 passed.
