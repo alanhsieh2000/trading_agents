@@ -1167,16 +1167,23 @@ def test_build_balance_sheet_outputs_preserves_rows_when_rendering_fails(
         )
 
 
-def test_build_cashflow_outputs_writes_tickers_only_and_reuses_snapshot(
+def test_build_cashflow_outputs_writes_point_in_time_payloads_atomically(
     monkeypatch, tmp_path
 ):
-    calls = []
+    archive = object()
+    archive_calls = []
+    render_calls = []
 
-    def fake_get_statement_text(ticker, statement_name, statement_attr):
-        calls.append((ticker, statement_name, statement_attr))
-        return f"{ticker} {statement_name} snapshot from {statement_attr}"
+    def fake_ensure_sec_archive(tickers, trade_dates):
+        archive_calls.append((tickers, trade_dates))
+        return archive
 
-    monkeypatch.setattr(build_dataset, "get_statement_text", fake_get_statement_text)
+    def fake_render(loaded_archive, ticker, as_of_date):
+        render_calls.append((loaded_archive, ticker, as_of_date))
+        return f"Point-in-time cash flow statement for {ticker} as of {as_of_date}.\nSEC"
+
+    monkeypatch.setattr(build_dataset, "ensure_sec_archive", fake_ensure_sec_archive)
+    monkeypatch.setattr(build_dataset, "render_point_in_time_cashflow", fake_render)
     options = build_dataset.BuildDatasetOptions(
         dataset_path=str(tmp_path / "eval.duckdb"),
         tickers=("AAPL", "AAPL", "GOOGL"),
@@ -1200,17 +1207,65 @@ def test_build_cashflow_outputs_writes_tickers_only_and_reuses_snapshot(
         aapl_second = dataset.tool_output("get_cashflow", "AAPL", "2025-12-03")
         googl_payload = dataset.tool_output("get_cashflow", "GOOGL", "2025-12-03")
 
-    assert calls == [
-        ("AAPL", "Cash flow statement", "cashflow"),
-        ("GOOGL", "Cash flow statement", "cashflow"),
-    ]
+    assert archive_calls == [(("AAPL", "GOOGL"), ["2025-12-02", "2025-12-03"])]
+    assert len(render_calls) == 4
+    assert all(call[0] is archive for call in render_calls)
     assert result.tool_name == "get_cashflow"
     assert result.symbols == ("AAPL", "GOOGL")
     assert result.payloads_written == 4
     assert result.lookback_days == 0
-    assert aapl_first == "AAPL Cash flow statement snapshot from cashflow"
-    assert aapl_second == aapl_first
-    assert googl_payload == "GOOGL Cash flow statement snapshot from cashflow"
+    assert aapl_first.startswith(
+        "Point-in-time cash flow statement for AAPL as of 2025-12-02."
+    )
+    assert aapl_second.startswith(
+        "Point-in-time cash flow statement for AAPL as of 2025-12-03."
+    )
+    assert googl_payload.startswith(
+        "Point-in-time cash flow statement for GOOGL as of 2025-12-03."
+    )
+
+
+def test_build_cashflow_outputs_preserves_rows_when_rendering_fails(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(build_dataset, "ensure_sec_archive", lambda *_: object())
+
+    def fail_second_date(_archive, ticker, as_of_date):
+        if as_of_date == "2025-12-03":
+            raise RuntimeError("malformed cash flow")
+        return f"Point-in-time cash flow statement for {ticker} as of {as_of_date}.\nSEC"
+
+    monkeypatch.setattr(build_dataset, "render_point_in_time_cashflow", fail_second_date)
+    options = build_dataset.BuildDatasetOptions(
+        dataset_path=str(tmp_path / "eval.duckdb"),
+        tickers=("AAPL",),
+        benchmark="SPY",
+        start_date="2025-12-02",
+        end_date="2025-12-04",
+        buffer_start_date="2025-12-01",
+        price_tail_days=2,
+        lookback_days=3,
+        weight_over=0.5,
+        weight_under=0.5,
+        limit_days=None,
+        verify_only=False,
+    )
+
+    with EvalDataset(options.dataset_path) as dataset:
+        dataset.put_tool_output("get_cashflow", "AAPL", "2025-12-02", "old-first")
+        dataset.put_tool_output("get_cashflow", "AAPL", "2025-12-03", "old-second")
+        with pytest.raises(RuntimeError, match="malformed cash flow"):
+            build_dataset.build_cashflow_outputs(
+                options, dataset, ["2025-12-02", "2025-12-03"]
+            )
+        assert (
+            dataset.tool_output("get_cashflow", "AAPL", "2025-12-02")
+            == "old-first"
+        )
+        assert (
+            dataset.tool_output("get_cashflow", "AAPL", "2025-12-03")
+            == "old-second"
+        )
 
 
 def test_build_income_statement_outputs_writes_tickers_only_and_reuses_snapshot(
@@ -1330,6 +1385,13 @@ def test_plan_b_main_builds_plan_b_dataset_path(monkeypatch, tmp_path, capsys):
         "render_point_in_time_balance_sheet",
         lambda _archive, ticker, as_of_date: (
             f"Point-in-time balance sheet for {ticker} as of {as_of_date}.\nSEC"
+        ),
+    )
+    monkeypatch.setattr(
+        build_dataset,
+        "render_point_in_time_cashflow",
+        lambda _archive, ticker, as_of_date: (
+            f"Point-in-time cash flow statement for {ticker} as of {as_of_date}.\nSEC"
         ),
     )
     monkeypatch.setattr(

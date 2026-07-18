@@ -70,6 +70,19 @@ class BalanceSheetLine:
     required: bool = False
 
 
+@dataclass(frozen=True)
+class CashFlowLine:
+    label: str
+    concepts: tuple[str, ...]
+    required: bool = False
+
+
+@dataclass(frozen=True)
+class CashFlowPeriod:
+    start_date: date
+    end_date: date
+
+
 BALANCE_SHEET_LINES = (
     BalanceSheetLine(
         "Cash and cash equivalents", ("CashAndCashEquivalentsAtCarryingValue",)
@@ -132,6 +145,72 @@ BALANCE_SHEET_LINES = (
     BalanceSheetLine(
         "Total liabilities and stockholders' equity",
         ("LiabilitiesAndStockholdersEquity",),
+        required=True,
+    ),
+)
+
+CASH_FLOW_LINES = (
+    CashFlowLine("Net income", ("NetIncomeLoss",), required=True),
+    CashFlowLine(
+        "Depreciation and amortization",
+        ("DepreciationDepletionAndAmortization", "Depreciation"),
+    ),
+    CashFlowLine(
+        "Share-based compensation",
+        ("ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"),
+    ),
+    CashFlowLine(
+        "Change in accounts receivable and other operating assets",
+        (
+            "IncreaseDecreaseInAccountsReceivable",
+            "IncreaseDecreaseInAccountsReceivableAndOtherOperatingAssets",
+        ),
+    ),
+    CashFlowLine("Change in inventories", ("IncreaseDecreaseInInventories",)),
+    CashFlowLine(
+        "Change in accounts payable", ("IncreaseDecreaseInAccountsPayable",)
+    ),
+    CashFlowLine(
+        "Net cash provided by operating activities",
+        ("NetCashProvidedByUsedInOperatingActivities",),
+        required=True,
+    ),
+    CashFlowLine(
+        "Capital expenditures",
+        (
+            "PaymentsToAcquirePropertyPlantAndEquipment",
+            "PaymentsToAcquireProductiveAssets",
+        ),
+        required=True,
+    ),
+    CashFlowLine(
+        "Net cash provided by (used in) investing activities",
+        ("NetCashProvidedByUsedInInvestingActivities",),
+        required=True,
+    ),
+    CashFlowLine(
+        "Common stock repurchases", ("PaymentsForRepurchaseOfCommonStock",)
+    ),
+    CashFlowLine("Dividends paid", ("PaymentsOfDividends",)),
+    CashFlowLine(
+        "Net cash provided by (used in) financing activities",
+        ("NetCashProvidedByUsedInFinancingActivities",),
+        required=True,
+    ),
+    CashFlowLine(
+        "Effect of exchange rates",
+        (
+            "EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+            "EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsIncludingDisposalGroupAndDiscontinuedOperations",
+            "EffectOfExchangeRateOnCashAndCashEquivalents",
+        ),
+    ),
+    CashFlowLine(
+        "Net change in cash",
+        (
+            "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect",
+            "CashAndCashEquivalentsPeriodIncreaseDecrease",
+        ),
         required=True,
     ),
 )
@@ -586,6 +665,186 @@ def render_point_in_time_balance_sheet(
     )
 
 
+def render_point_in_time_cashflow(
+    archive: SecArchive,
+    ticker: str,
+    as_of_date: str,
+) -> str:
+    """Render the latest cash-flow statement disclosed before one replay date."""
+    symbol = ticker.upper().strip()
+    cutoff = _parse_date(as_of_date)
+    filing = _latest_filing_before(archive, symbol, cutoff)
+    company_facts = archive.company_facts_by_ticker[symbol]
+    periods = _cash_flow_periods(company_facts, filing)
+
+    rendered_rows: list[tuple[str, list[str]]] = []
+    facts_by_label: dict[str, list[SecFact | None]] = {}
+    for line in CASH_FLOW_LINES:
+        facts = [
+            _duration_fact_for_period(
+                company_facts,
+                filing,
+                line.concepts,
+                period,
+                required=line.required,
+            )
+            for period in periods
+        ]
+        if any(fact is not None for fact in facts):
+            facts_by_label[line.label] = facts
+            rendered_rows.append(
+                (
+                    line.label,
+                    [
+                        "" if fact is None else _format_number(fact.value)
+                        for fact in facts
+                    ],
+                )
+            )
+
+    operating = facts_by_label["Net cash provided by operating activities"]
+    capital_expenditures = facts_by_label["Capital expenditures"]
+    free_cash_flow = [
+        operating[index].value - capital_expenditures[index].value
+        for index in range(len(periods))
+    ]
+    capital_expenditure_index = next(
+        index
+        for index, (label, _) in enumerate(rendered_rows)
+        if label == "Capital expenditures"
+    )
+    rendered_rows.insert(
+        capital_expenditure_index + 1,
+        (
+            "Free cash flow (derived as operating cash flow minus capital expenditures)",
+            [_format_number(value) for value in free_cash_flow],
+        ),
+    )
+
+    investing = facts_by_label[
+        "Net cash provided by (used in) investing activities"
+    ]
+    financing = facts_by_label[
+        "Net cash provided by (used in) financing activities"
+    ]
+    exchange_rates = facts_by_label.get("Effect of exchange rates")
+    net_change = facts_by_label["Net change in cash"]
+    for index, period in enumerate(periods):
+        exchange_rate = (
+            0.0
+            if exchange_rates is None or exchange_rates[index] is None
+            else exchange_rates[index].value
+        )
+        reconciled_change = (
+            operating[index].value
+            + investing[index].value
+            + financing[index].value
+            + exchange_rate
+        )
+        tolerance = max(1.0, abs(net_change[index].value) * 1e-9)
+        if abs(reconciled_change - net_change[index].value) > tolerance:
+            raise RuntimeError(
+                f"SEC filing {filing.accession_number} has an unreconciled cash "
+                f"change for {_format_cash_flow_period(period)}."
+            )
+
+    output = io.StringIO()
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(
+        ("line_item", *(_format_cash_flow_period(period) for period in periods))
+    )
+    for label, values in rendered_rows:
+        writer.writerow((label, *values))
+    table = output.getvalue().strip()
+    return "\n".join(
+        (
+            f"Point-in-time cash flow statement for {symbol} as of {as_of_date}.",
+            "Source: SEC EDGAR Company Facts and archived filing package.",
+            (
+                f"Source filing: {filing.form} filed {filing.filing_date.isoformat()}, "
+                f"period ended {filing.report_date.isoformat()}, accession "
+                f"{filing.accession_number}."
+            ),
+            (
+                f"Rows covered: {len(rendered_rows)}. "
+                f"Periods covered: {len(periods)}. Values are USD."
+            ),
+            "Cash-outflow payment lines are shown as positive amounts as reported by SEC.",
+            table,
+        )
+    )
+
+
+def _cash_flow_periods(
+    company_facts: dict[str, Any], filing: SecFiling
+) -> tuple[CashFlowPeriod, ...]:
+    anchors = [
+        fact
+        for fact in _fact_candidates(
+            company_facts,
+            filing,
+            ("NetCashProvidedByUsedInOperatingActivities",),
+            "USD",
+        )
+        if fact.start_date is not None
+    ]
+    current_candidates = [
+        fact
+        for fact in anchors
+        if fact.end_date == filing.report_date
+        and (
+            300 <= (fact.end_date - fact.start_date).days <= 400
+            if filing.form == "10-K"
+            else 60 <= (fact.end_date - fact.start_date).days <= 300
+        )
+    ]
+    if not current_candidates:
+        raise RuntimeError(
+            f"SEC filing {filing.accession_number} has no current cash-flow period."
+        )
+    if filing.form == "10-K":
+        current = min(
+            current_candidates,
+            key=lambda fact: abs((fact.end_date - fact.start_date).days - 365),
+        )
+    else:
+        current = max(
+            current_candidates,
+            key=lambda fact: (fact.end_date - fact.start_date).days,
+        )
+    target_days = (current.end_date - current.start_date).days
+
+    candidates: set[CashFlowPeriod] = set()
+    for fact in anchors:
+        duration_days = (fact.end_date - fact.start_date).days
+        matching_duration = (
+            300 <= duration_days <= 400
+            if filing.form == "10-K"
+            else abs(duration_days - target_days) <= 15
+        )
+        if matching_duration:
+            candidates.add(CashFlowPeriod(fact.start_date, fact.end_date))
+    limit = 3 if filing.form == "10-K" else 2
+    periods = tuple(
+        sorted(
+            candidates,
+            key=lambda period: (period.end_date, period.start_date),
+            reverse=True,
+        )[:limit]
+    )
+    if not periods or periods[0] != CashFlowPeriod(
+        current.start_date, current.end_date
+    ):
+        raise RuntimeError(
+            f"SEC filing {filing.accession_number} has ambiguous cash-flow periods."
+        )
+    return periods
+
+
+def _format_cash_flow_period(period: CashFlowPeriod) -> str:
+    return f"{period.start_date.isoformat()}..{period.end_date.isoformat()}"
+
+
 def _latest_filing_before(archive: SecArchive, symbol: str, cutoff: date) -> SecFiling:
     filings = archive.filings_by_ticker.get(symbol, ())
     eligible = [filing for filing in filings if filing.filing_date < cutoff]
@@ -812,6 +1071,39 @@ def _duration_fact(
             concepts.index(fact.concept),
         ),
     )
+
+
+def _duration_fact_for_period(
+    company_facts: dict[str, Any],
+    filing: SecFiling,
+    concepts: Sequence[str],
+    period: CashFlowPeriod,
+    *,
+    required: bool = True,
+) -> SecFact | None:
+    candidates = [
+        fact
+        for fact in _fact_candidates(company_facts, filing, concepts, "USD")
+        if fact.start_date == period.start_date and fact.end_date == period.end_date
+    ]
+    if not candidates:
+        if not required:
+            return None
+        raise RuntimeError(
+            f"SEC filing {filing.accession_number} has no usable {concepts[0]} fact "
+            f"for {_format_cash_flow_period(period)}."
+        )
+    best_concept = min(concepts.index(fact.concept) for fact in candidates)
+    preferred = [
+        fact for fact in candidates if concepts.index(fact.concept) == best_concept
+    ]
+    values = {fact.value for fact in preferred}
+    if len(values) != 1:
+        raise RuntimeError(
+            f"SEC filing {filing.accession_number} has conflicting "
+            f"{concepts[best_concept]} facts for {_format_cash_flow_period(period)}."
+        )
+    return preferred[0]
 
 
 def _instant_fact(

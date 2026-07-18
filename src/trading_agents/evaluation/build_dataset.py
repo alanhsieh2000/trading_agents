@@ -35,6 +35,7 @@ from trading_agents.evaluation.reddit_coverage import (
 from trading_agents.evaluation.sec_sources import (
     ensure_sec_archive,
     render_point_in_time_balance_sheet,
+    render_point_in_time_cashflow,
     render_point_in_time_fundamentals,
 )
 from trading_agents.tools.fundamentals import get_statement_text
@@ -1166,15 +1167,37 @@ def build_cashflow_outputs(
     dataset: EvalDataset,
     transaction_days: Sequence[str],
 ) -> ToolOutputBuildResult:
-    """Record replayable ``get_cashflow`` payloads for each ticker and day."""
-    return build_snapshot_tool_outputs(
+    """Record point-in-time SEC cash-flow statements for each ticker and day."""
+    symbols = _symbols_for_indicator_outputs(options)
+    if not transaction_days:
+        return ToolOutputBuildResult(
+            tool_name="get_cashflow",
+            symbols=symbols,
+            payloads_written=0,
+            transaction_days=(),
+            lookback_days=0,
+        )
+
+    archive = ensure_sec_archive(symbols, transaction_days)
+    payload_rows: list[tuple[str, str, str, str]] = []
+    for symbol in symbols:
+        for as_of_date in transaction_days:
+            payload = render_point_in_time_cashflow(archive, symbol, as_of_date)
+            if not payload.startswith(
+                f"Point-in-time cash flow statement for {symbol} as of {as_of_date}."
+            ):
+                raise RuntimeError(
+                    f"Could not render SEC cash flow for {symbol} on {as_of_date}."
+                )
+            payload_rows.append(("get_cashflow", symbol, as_of_date, payload))
+
+    dataset.put_tool_outputs(payload_rows)
+    return ToolOutputBuildResult(
         tool_name="get_cashflow",
-        render_payload=lambda ticker: get_statement_text(
-            ticker, "Cash flow statement", "cashflow"
-        ),
-        options=options,
-        dataset=dataset,
-        transaction_days=transaction_days,
+        symbols=symbols,
+        payloads_written=len(payload_rows),
+        transaction_days=tuple(transaction_days),
+        lookback_days=0,
     )
 
 

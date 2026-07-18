@@ -290,6 +290,204 @@ def test_render_point_in_time_balance_sheet_rejects_conflicting_facts(tmp_path):
         sec_sources.render_point_in_time_balance_sheet(archive, "TEST", "2024-02-01")
 
 
+def _add_cash_flow_period(
+    facts,
+    accession,
+    start,
+    end,
+    *,
+    operating,
+    capital_expenditures,
+    investing,
+    financing,
+    exchange_rate,
+    net_change=None,
+):
+    values = (
+        ("NetIncomeLoss", operating / 2),
+        ("NetCashProvidedByUsedInOperatingActivities", operating),
+        ("PaymentsToAcquireProductiveAssets", capital_expenditures),
+        ("NetCashProvidedByUsedInInvestingActivities", investing),
+        ("NetCashProvidedByUsedInFinancingActivities", financing),
+        (
+            "EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+            exchange_rate,
+        ),
+        (
+            "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect",
+            operating + investing + financing + exchange_rate
+            if net_change is None
+            else net_change,
+        ),
+    )
+    for concept, value in values:
+        _add_fact(
+            facts,
+            "us-gaap",
+            concept,
+            "USD",
+            accession,
+            value,
+            end,
+            start=start,
+        )
+
+
+def test_render_point_in_time_cashflow_selects_filing_statement_periods(tmp_path):
+    old = sec_sources.SecFiling(
+        "TEST",
+        "0000000001",
+        "old",
+        "10-Q",
+        date(2023, 10, 25),
+        date(2023, 9, 30),
+        "old.htm",
+    )
+    new = sec_sources.SecFiling(
+        "TEST",
+        "0000000001",
+        "new",
+        "10-K",
+        date(2024, 1, 31),
+        date(2023, 12, 31),
+        "new.htm",
+    )
+    facts = {"cik": 1, "facts": {}}
+    for start, end, operating in (
+        ("2023-01-01", "2023-09-30", 100),
+        ("2022-01-01", "2022-09-30", 80),
+        ("2023-07-01", "2023-09-30", 30),
+        ("2022-10-01", "2023-09-30", 130),
+    ):
+        _add_cash_flow_period(
+            facts["facts"],
+            "old",
+            start,
+            end,
+            operating=operating,
+            capital_expenditures=20,
+            investing=-30,
+            financing=-60,
+            exchange_rate=-1,
+        )
+    for year, operating in ((2023, 120), (2022, 110), (2021, 100)):
+        _add_cash_flow_period(
+            facts["facts"],
+            "new",
+            f"{year}-01-01",
+            f"{year}-12-31",
+            operating=operating,
+            capital_expenditures=20,
+            investing=-30,
+            financing=-60,
+            exchange_rate=-1,
+        )
+    archive = sec_sources.SecArchive(
+        tmp_path,
+        {"TEST": (old, new)},
+        {"TEST": facts},
+    )
+
+    same_day = sec_sources.render_point_in_time_cashflow(
+        archive, "TEST", "2024-01-31"
+    )
+    next_day = sec_sources.render_point_in_time_cashflow(
+        archive, "TEST", "2024-02-01"
+    )
+
+    assert "Source filing: 10-Q filed 2023-10-25" in same_day
+    assert (
+        "line_item,2023-01-01..2023-09-30,2022-01-01..2022-09-30"
+        in same_day
+    )
+    assert "2023-07-01..2023-09-30" not in same_day
+    assert "2022-10-01..2023-09-30" not in same_day
+    assert "Source filing: 10-K filed 2024-01-31" in next_day
+    assert (
+        "line_item,2023-01-01..2023-12-31,2022-01-01..2022-12-31,"
+        "2021-01-01..2021-12-31" in next_day
+    )
+    assert (
+        "Free cash flow (derived as operating cash flow minus capital expenditures),"
+        "100,90,80" in next_day
+    )
+
+
+def test_render_point_in_time_cashflow_rejects_unreconciled_change(tmp_path):
+    filing = sec_sources.SecFiling(
+        "TEST",
+        "0000000001",
+        "accn",
+        "10-K",
+        date(2024, 1, 31),
+        date(2023, 12, 31),
+        "test.htm",
+    )
+    facts = {"cik": 1, "facts": {}}
+    _add_cash_flow_period(
+        facts["facts"],
+        "accn",
+        "2023-01-01",
+        "2023-12-31",
+        operating=100,
+        capital_expenditures=20,
+        investing=-30,
+        financing=-60,
+        exchange_rate=-1,
+        net_change=999,
+    )
+    archive = sec_sources.SecArchive(
+        tmp_path,
+        {"TEST": (filing,)},
+        {"TEST": facts},
+    )
+
+    with pytest.raises(RuntimeError, match="unreconciled cash change"):
+        sec_sources.render_point_in_time_cashflow(archive, "TEST", "2024-02-01")
+
+
+def test_render_point_in_time_cashflow_rejects_conflicting_facts(tmp_path):
+    filing = sec_sources.SecFiling(
+        "TEST",
+        "0000000001",
+        "accn",
+        "10-K",
+        date(2024, 1, 31),
+        date(2023, 12, 31),
+        "test.htm",
+    )
+    facts = {"cik": 1, "facts": {}}
+    _add_cash_flow_period(
+        facts["facts"],
+        "accn",
+        "2023-01-01",
+        "2023-12-31",
+        operating=100,
+        capital_expenditures=20,
+        investing=-30,
+        financing=-60,
+        exchange_rate=-1,
+    )
+    _add_fact(
+        facts["facts"],
+        "us-gaap",
+        "NetIncomeLoss",
+        "USD",
+        "accn",
+        999,
+        "2023-12-31",
+        start="2023-01-01",
+    )
+    archive = sec_sources.SecArchive(
+        tmp_path,
+        {"TEST": (filing,)},
+        {"TEST": facts},
+    )
+
+    with pytest.raises(RuntimeError, match="conflicting NetIncomeLoss facts"):
+        sec_sources.render_point_in_time_cashflow(archive, "TEST", "2024-02-01")
+
+
 def test_duration_fact_prefers_quarter_over_year_to_date():
     filing = sec_sources.SecFiling(
         "TEST",
