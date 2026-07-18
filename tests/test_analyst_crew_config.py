@@ -10,6 +10,7 @@ from trading_agents.crews.analyst_crew.analyst_crew import (
     resolve_analyst_runtime_config,
     run_analyst_stage,
 )
+from trading_agents.evaluation.dataset import EvalDataset
 
 
 AGENT_KEYS = {"analyst"}
@@ -319,6 +320,74 @@ def test_run_analyst_stage_uses_mocked_sequential_crew(monkeypatch):
         "news_report": "news report",
         "fundamentals_report": "fundamentals report",
     }
+
+
+def test_run_analyst_stage_uses_only_dataset_sources_in_evaluation_mode(
+    monkeypatch, tmp_path
+):
+    dataset_path = tmp_path / "eval.duckdb"
+    with EvalDataset(dataset_path) as dataset:
+        for tool_name, payload in (
+            ("get_news", "recorded news"),
+            ("fetch_stocktwits_messages", "recorded stocktwits"),
+            ("fetch_reddit_posts", "recorded reddit"),
+        ):
+            dataset.put_tool_output(tool_name, "AAPL", "2024-01-02", payload)
+
+    captured_inputs = {}
+    captured_tools = {}
+
+    class FakeCrew:
+        def kickoff(self, inputs):
+            captured_inputs.update(inputs)
+            return _crew_output(
+                [
+                    ("market_analysis", "market report"),
+                    ("sentiment_analysis", "sentiment report"),
+                    ("news_analysis", "news report"),
+                    ("fundamentals_analysis", "fundamentals report"),
+                ]
+            )
+
+    class FakeAnalystCrew:
+        def configure_tools(self, tools):
+            captured_tools.update(tools)
+
+        def crew(self):
+            return FakeCrew()
+
+    def fail_live_call(*_args, **_kwargs):
+        raise AssertionError("evaluation mode must not call a live source")
+
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__ENABLED", "true")
+    monkeypatch.setenv(
+        "TRADING_AGENTS_EVALUATION__DATASET_PATH", str(dataset_path)
+    )
+    monkeypatch.setattr(analyst_module, "AnalystCrew", FakeAnalystCrew)
+    monkeypatch.setattr(analyst_module, "fetch_stocktwits_messages", fail_live_call)
+    monkeypatch.setattr(analyst_module, "fetch_reddit_posts", fail_live_call)
+    analyst_module.get_settings.cache_clear()
+
+    try:
+        run_analyst_stage({"ticker": "aapl", "trade_date": "2024-01-02"})
+    finally:
+        analyst_module.get_settings.cache_clear()
+
+    assert captured_inputs["news_sentiment_block"] == "recorded news"
+    assert captured_inputs["news_block"] == "recorded news"
+    assert captured_inputs["stocktwits_block"] == "recorded stocktwits"
+    assert captured_inputs["reddit_block"] == "recorded reddit"
+    assert set(captured_tools) == {
+        "get_stock_data",
+        "get_indicators",
+        "get_news",
+        "get_global_news",
+        "get_fundamentals",
+        "get_balance_sheet",
+        "get_cashflow",
+        "get_income_statement",
+    }
+    assert all(tool._dataset.path == dataset_path for tool in captured_tools.values())
 
 
 def _load_yaml(file_name: str):

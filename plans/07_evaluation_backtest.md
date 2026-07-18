@@ -115,9 +115,17 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [x] (2026-07-18 08:03Z) Replaced all 183 `get_income_statement` replay payloads with SEC-backed point-in-time statements. The renderer selects three annual periods for 10-Ks and current/prior-year quarterly periods for 10-Qs, excluding year-to-date and trailing-twelve-month facts, and validates gross profit, pretax/tax/net-income reconciliation, and diluted-EPS consistency where the source facts permit. GOOGL switches filings on `2024-02-01`; AAPL and AMZN switch on `2024-02-05`. The audit found 61 rows per ticker, zero legacy Yahoo markers, zero future periods, zero filing-date/report-period/accession violations, and zero arithmetic failures. Income-statement rows hash to `9b82ab9bb1b6b0b811fdf763a54b5e63cef4d70b678bc2f1596c3035c5af5c9a`; the other 1,708 tool outputs remained unchanged at `bd02e97fc80e3cd9198cd36195486f760b8d1a22022e24010cfdcbc268a10260`; the DuckDB hashes to `aecc34cdfbba6dac5e5c57784d0afc218415666d72d517941749c4edddab0289`. Focused validation reported 96 passed and the full suite reported 214 passed.
 - [x] (2026-07-16) Historical Reddit-source gate opened for the configured 2024-Q1 evaluation: Arctic Shift API responses were collected and retained under `data/raw-backtest/arctic-shift/` (210 JSON pages: AAPL 62, GOOGL 84, AMZN 64). The remaining work is offline archive validation and dataset ingestion, not a live-source probe or replacement-period scan.
 - [x] (2026-07-16) Historical StockTwits-source gate opened for the configured 2024-Q1 evaluation: retained pagination responses under `data/raw-backtest/stocktwits/` reach before the 2023-12-18 two-week-lookback cutoff for every ticker (21,165 JSON pages: AAPL 10,983, GOOGL 3,562, AMZN 6,620). The remaining work is offline archive validation and dataset ingestion, not live StockTwits pagination.
-- [x] (2026-06-11) Created `src/trading_agents/evaluation/eval_tools.py` (dataset-backed `DatasetBackedTool` + `build_dataset_tools`). Remaining: the analyst-crew tool-injection seam.
+- [x] (2026-06-11) Created `src/trading_agents/evaluation/eval_tools.py` (dataset-backed `DatasetBackedTool` + `build_dataset_tools`).
+- [x] (2026-07-18 13:38Z) Wired evaluation mode into the analyst crew: all eight
+  task-bound tools and the three pre-fetched news/social blocks now read from the
+  configured DuckDB dataset, while the live path remains unchanged when evaluation is
+  disabled.
 - [x] (2026-06-11) Created `src/trading_agents/evaluation/backtest.py` (`simulate_position` + `cumulative_return`).
-- [ ] (pending) Create `src/trading_agents/evaluation/run_eval.py` and the `run-eval` entry point.
+- [x] (2026-07-18 13:38Z) Created `src/trading_agents/evaluation/run_eval.py` and the
+  `run-eval` entry point. The runner supports `--tickers` and `--limit-days`, processes
+  days chronologically with an isolated lesson store and dataset-backed price fetcher,
+  calculates CR, and writes Markdown and CSV reports under `output/eval/`. Focused
+  tests and the full repository suite pass; the full suite reports 219 passed.
 - [x] (2026-06-11) Added unit tests `tests/test_eval_backtest.py` (10) and `tests/test_eval_dataset.py` (7); all pass, full suite 113 passed with no regressions.
 - [ ] (pending) Build the committed dataset `data/eval_dataset.duckdb` and run a smoke evaluation.
 - [x] (2026-07-17) Audited all 1,891 prepared tool-output keys, 364 price rows, and
@@ -715,6 +723,17 @@ all 183 income-statement rows and retired the final current-snapshot builder pat
 audit found 61 rows per ticker, zero legacy Yahoo markers, zero future periods, and
 zero filing-date, accession, period, or arithmetic violations. Focused validation
 reported 96 passed; the full suite reported 214 passed.
+
+Milestone 18 — Evaluation runner and offline analyst seam (2026-07-18 13:38Z).
+Evaluation mode now injects DuckDB-backed replacements into every analyst task and
+loads the prompt-only news, Reddit, and StockTwits blocks from the same replay date.
+The new `run-eval` command executes all five stages in chronological ticker/day order,
+uses recorded prices for portfolio reflection and exchange simulation, isolates lesson
+state per run, and writes `evaluation_report.md` plus `evaluation_results.csv` under
+`output/eval/`. It supports ticker subsets and day limits for smoke runs, fails on
+missing price coverage, and leaves normal live analysis unchanged. Focused tests pass,
+`uv run run-eval --help` resolves successfully, Ruff reports no issues in the changed
+Python files, and the full suite reports 219 passed.
 
 
 ## Context and Orientation
@@ -1333,3 +1352,9 @@ point-in-time statements using the existing validated filing archive. The refres
 rows select annual 10-K or quarterly 10-Q periods from the selected accession and pass
 zero-issue filing-date, period, accession, gross-profit, net-income, and EPS audits.
 This resolves the final point-in-time financial-statement finding.
+
+Revision Note: 2026-07-18 Added the evaluation-mode analyst injection seam and the
+`run-eval` orchestrator. The runner replays recorded analyst evidence and prices,
+preserves chronological portfolio lessons in a fresh run-local store, reports per-day
+ratings and CR in Markdown/CSV, and supports bounded smoke runs. The full suite reports
+219 passed; running the LLM-backed smoke evaluation remains the next pending item.

@@ -8,6 +8,7 @@ from crewai import Agent, Crew, Process, Task
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from crewai.crews.crew_output import CrewOutput
 from crewai.project import CrewBase, agent, crew, task
+from crewai.tools import BaseTool
 from dotenv import load_dotenv
 
 from trading_agents.config import (
@@ -39,6 +40,16 @@ REPORT_TASK_TO_KEY = {
     "fundamentals_analysis": "fundamentals_report",
 }
 ANALYST_TASK_NAMES = tuple(REPORT_TASK_TO_KEY)
+ANALYST_TASK_TOOL_NAMES = {
+    "market_analysis": ("get_stock_data", "get_indicators"),
+    "news_analysis": ("get_news", "get_global_news"),
+    "fundamentals_analysis": (
+        "get_fundamentals",
+        "get_balance_sheet",
+        "get_cashflow",
+        "get_income_statement",
+    ),
+}
 
 
 @CrewBase
@@ -51,6 +62,16 @@ class AnalystCrew:
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
 
+    def configure_tools(self, tools: Mapping[str, BaseTool]) -> None:
+        """Override task tools for one crew instance."""
+        self._tool_overrides = dict(tools)
+
+    def _task_tools(self, task_name: str, defaults: list[BaseTool]) -> list[BaseTool]:
+        overrides = getattr(self, "_tool_overrides", None)
+        if overrides is None:
+            return defaults
+        return [overrides[name] for name in ANALYST_TASK_TOOL_NAMES[task_name]]
+
     @agent
     def analyst(self) -> Agent:
         return Agent(
@@ -61,7 +82,9 @@ class AnalystCrew:
     def market_analysis(self) -> Task:
         return Task(
             config=self.tasks_config["market_analysis"],  # type: ignore[index]
-            tools=[get_stock_data, get_indicators],
+            tools=self._task_tools(
+                "market_analysis", [get_stock_data, get_indicators]
+            ),
         )
 
     @task
@@ -75,19 +98,22 @@ class AnalystCrew:
     def news_analysis(self) -> Task:
         return Task(
             config=self.tasks_config["news_analysis"],  # type: ignore[index]
-            tools=[get_news, get_global_news],
+            tools=self._task_tools("news_analysis", [get_news, get_global_news]),
         )
 
     @task
     def fundamentals_analysis(self) -> Task:
         return Task(
             config=self.tasks_config["fundamentals_analysis"],  # type: ignore[index]
-            tools=[
-                get_fundamentals,
-                get_balance_sheet,
-                get_cashflow,
-                get_income_statement,
-            ],
+            tools=self._task_tools(
+                "fundamentals_analysis",
+                [
+                    get_fundamentals,
+                    get_balance_sheet,
+                    get_cashflow,
+                    get_income_statement,
+                ],
+            ),
         )
 
     @crew
@@ -109,12 +135,32 @@ class AnalystCrew:
 
 def run_analyst_stage(inputs: Mapping[str, Any]) -> dict[str, str]:
     """Run the analyst stage sequentially and return all reports by stable key."""
-    prepared_inputs = prepare_analyst_inputs(inputs)
-    result = AnalystCrew().crew().kickoff(inputs=prepared_inputs)
-    return extract_analyst_reports(result)
+    evaluation = get_settings().evaluation
+    if not evaluation.enabled:
+        prepared_inputs = prepare_analyst_inputs(inputs)
+        result = AnalystCrew().crew().kickoff(inputs=prepared_inputs)
+        return extract_analyst_reports(result)
+
+    from trading_agents.evaluation.dataset import EvalDataset
+    from trading_agents.evaluation.eval_tools import build_dataset_tools
+
+    with EvalDataset(evaluation.dataset_path, read_only=True) as dataset:
+        prepared_inputs = prepare_analyst_inputs(inputs, dataset=dataset)
+        crew_source = AnalystCrew()
+        crew_source.configure_tools(
+            build_dataset_tools(
+                dataset,
+                prepared_inputs["ticker"],
+                prepared_inputs["trade_date"],
+            )
+        )
+        result = crew_source.crew().kickoff(inputs=prepared_inputs)
+        return extract_analyst_reports(result)
 
 
-def prepare_analyst_inputs(inputs: Mapping[str, Any]) -> dict[str, Any]:
+def prepare_analyst_inputs(
+    inputs: Mapping[str, Any], *, dataset: Any | None = None
+) -> dict[str, Any]:
     """Normalize analyst-stage inputs and prefetch prompt-only evidence blocks."""
     ticker = _required_string(inputs, "ticker").upper()
     current_date = _current_date(inputs)
@@ -130,6 +176,24 @@ def prepare_analyst_inputs(inputs: Mapping[str, Any]) -> dict[str, Any]:
     prepared["end_date"] = current_date
     prepared["sentiment_start_date"] = start_date
     prepared["asset_label"] = str(inputs.get("asset_label") or ticker)
+
+    if get_settings().evaluation.enabled:
+        if dataset is None:
+            from trading_agents.evaluation.dataset import EvalDataset
+
+            evaluation = get_settings().evaluation
+            with EvalDataset(evaluation.dataset_path, read_only=True) as opened_dataset:
+                return prepare_analyst_inputs(inputs, dataset=opened_dataset)
+        news_block = dataset.tool_output("get_news", ticker, current_date)
+        prepared["news_sentiment_block"] = news_block
+        prepared["news_block"] = news_block
+        prepared["stocktwits_block"] = dataset.tool_output(
+            "fetch_stocktwits_messages", ticker, current_date
+        )
+        prepared["reddit_block"] = dataset.tool_output(
+            "fetch_reddit_posts", ticker, current_date
+        )
+        return prepared
 
     if "news_block" in prepared and "news_sentiment_block" not in prepared:
         prepared["news_sentiment_block"] = prepared["news_block"]
