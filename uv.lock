@@ -3833,7 +3833,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aisuite", specifier = ">=0.1.6" },
-    { name = "crewai", extras = ["tools"], specifier = ">=1.15.1" },
+    { name = "crewai", extras = ["tools"], specifier = ">=1.15.2" },
     { name = "duckdb", specifier = ">=1.5.2" },
     { name = "exa-py", specifier = ">=2.13.0" },
     { name = "markdown", specifier = ">=3.10.2" },
