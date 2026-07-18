@@ -177,6 +177,119 @@ def test_render_point_in_time_fundamentals_uses_prior_filing_and_close(tmp_path)
     assert "Current price" not in next_day
 
 
+def test_render_point_in_time_balance_sheet_uses_disclosed_filing_periods(tmp_path):
+    old = sec_sources.SecFiling(
+        "TEST",
+        "0000000001",
+        "old",
+        "10-Q",
+        date(2023, 10, 25),
+        date(2023, 9, 30),
+        "old.htm",
+    )
+    new = sec_sources.SecFiling(
+        "TEST",
+        "0000000001",
+        "new",
+        "10-K",
+        date(2024, 1, 31),
+        date(2023, 12, 31),
+        "new.htm",
+    )
+    facts = {"cik": 1, "facts": {}}
+    for accession, period, assets, equity, include_liabilities in (
+        ("old", "2023-09-30", 900, 350, True),
+        ("new", "2022-12-31", 950, 375, False),
+        ("new", "2023-12-31", 1000, 400, False),
+    ):
+        for concept, value in (
+            ("CashAndCashEquivalentsAtCarryingValue", assets / 10),
+            ("ShortTermInvestments", assets / 20),
+            ("Assets", assets),
+            ("StockholdersEquity", equity),
+            ("LiabilitiesAndStockholdersEquity", assets),
+        ):
+            _add_fact(
+                facts["facts"],
+                "us-gaap",
+                concept,
+                "USD",
+                accession,
+                value,
+                period,
+            )
+        if include_liabilities:
+            _add_fact(
+                facts["facts"],
+                "us-gaap",
+                "Liabilities",
+                "USD",
+                accession,
+                assets - equity,
+                period,
+            )
+    archive = sec_sources.SecArchive(
+        tmp_path,
+        {"TEST": (old, new)},
+        {"TEST": facts},
+    )
+
+    same_day = sec_sources.render_point_in_time_balance_sheet(
+        archive, "TEST", "2024-01-31"
+    )
+    next_day = sec_sources.render_point_in_time_balance_sheet(
+        archive, "TEST", "2024-02-01"
+    )
+
+    assert "Source filing: 10-Q filed 2023-10-25" in same_day
+    assert "line_item,2023-09-30" in same_day
+    assert "Source filing: 10-K filed 2024-01-31" in next_day
+    assert "line_item,2023-12-31,2022-12-31" in next_day
+    assert "Cash and cash equivalents,100,95" in next_day
+    assert "Marketable securities,50,47.5" in next_day
+    assert (
+        "Total liabilities (derived as assets minus equity where unavailable),600,575"
+        in next_day
+    )
+    assert "2024-" not in next_day.split("line_item", 1)[1]
+
+
+def test_render_point_in_time_balance_sheet_rejects_conflicting_facts(tmp_path):
+    filing = sec_sources.SecFiling(
+        "TEST",
+        "0000000001",
+        "accn",
+        "10-K",
+        date(2024, 1, 31),
+        date(2023, 12, 31),
+        "test.htm",
+    )
+    facts = {"cik": 1, "facts": {}}
+    for concept, value in (
+        ("Assets", 1000),
+        ("Assets", 1001),
+        ("StockholdersEquity", 400),
+        ("LiabilitiesAndStockholdersEquity", 1000),
+    ):
+        _add_fact(
+            facts["facts"],
+            "us-gaap",
+            concept,
+            "USD",
+            "accn",
+            value,
+            "2023-12-31",
+        )
+    archive = sec_sources.SecArchive(
+        tmp_path,
+        {"TEST": (filing,)},
+        {"TEST": facts},
+    )
+
+    with pytest.raises(RuntimeError, match="conflicting Assets facts"):
+        sec_sources.render_point_in_time_balance_sheet(archive, "TEST", "2024-02-01")
+
+
 def test_duration_fact_prefers_quarter_over_year_to_date():
     filing = sec_sources.SecFiling(
         "TEST",

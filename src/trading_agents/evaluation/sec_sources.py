@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import math
 import os
@@ -59,6 +61,80 @@ class SecFact:
     unit: str
     start_date: date | None
     end_date: date
+
+
+@dataclass(frozen=True)
+class BalanceSheetLine:
+    label: str
+    concepts: tuple[str, ...]
+    required: bool = False
+
+
+BALANCE_SHEET_LINES = (
+    BalanceSheetLine(
+        "Cash and cash equivalents", ("CashAndCashEquivalentsAtCarryingValue",)
+    ),
+    BalanceSheetLine(
+        "Marketable securities",
+        ("MarketableSecuritiesCurrent", "ShortTermInvestments"),
+    ),
+    BalanceSheetLine("Accounts receivable, net", ("AccountsReceivableNetCurrent",)),
+    BalanceSheetLine("Inventories", ("InventoryNet",)),
+    BalanceSheetLine("Total current assets", ("AssetsCurrent",)),
+    BalanceSheetLine(
+        "Property, plant and equipment, net",
+        (
+            "PropertyPlantAndEquipmentNet",
+            "PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization",
+        ),
+    ),
+    BalanceSheetLine(
+        "Operating lease right-of-use assets", ("OperatingLeaseRightOfUseAsset",)
+    ),
+    BalanceSheetLine("Goodwill", ("Goodwill",)),
+    BalanceSheetLine(
+        "Intangible assets, net",
+        ("FiniteLivedIntangibleAssetsNet", "IntangibleAssetsNetExcludingGoodwill"),
+    ),
+    BalanceSheetLine("Total assets", ("Assets",), required=True),
+    BalanceSheetLine("Accounts payable", ("AccountsPayableCurrent",)),
+    BalanceSheetLine(
+        "Short-term debt",
+        ("ShortTermBorrowings", "ShortTermDebtCurrent", "LongTermDebtCurrent"),
+    ),
+    BalanceSheetLine(
+        "Operating lease liabilities, current",
+        ("OperatingLeaseLiabilityCurrent",),
+    ),
+    BalanceSheetLine("Total current liabilities", ("LiabilitiesCurrent",)),
+    BalanceSheetLine("Long-term debt", ("LongTermDebtNoncurrent",)),
+    BalanceSheetLine(
+        "Operating lease liabilities, noncurrent",
+        ("OperatingLeaseLiabilityNoncurrent",),
+    ),
+    BalanceSheetLine(
+        "Common stock and additional paid-in capital",
+        (
+            "CommonStocksIncludingAdditionalPaidInCapital",
+            "AdditionalPaidInCapital",
+            "CommonStockValue",
+        ),
+    ),
+    BalanceSheetLine(
+        "Retained earnings (accumulated deficit)",
+        ("RetainedEarningsAccumulatedDeficit",),
+    ),
+    BalanceSheetLine(
+        "Accumulated other comprehensive income (loss)",
+        ("AccumulatedOtherComprehensiveIncomeLossNetOfTax",),
+    ),
+    BalanceSheetLine("Stockholders' equity", ("StockholdersEquity",), required=True),
+    BalanceSheetLine(
+        "Total liabilities and stockholders' equity",
+        ("LiabilitiesAndStockholdersEquity",),
+        required=True,
+    ),
+)
 
 
 class _SecClient:
@@ -261,11 +337,7 @@ def render_point_in_time_fundamentals(
     """Render fundamentals known strictly before one evaluation trade date."""
     symbol = ticker.upper().strip()
     cutoff = _parse_date(as_of_date)
-    filings = archive.filings_by_ticker.get(symbol, ())
-    eligible = [filing for filing in filings if filing.filing_date < cutoff]
-    if not eligible:
-        raise RuntimeError(f"No SEC filing for {symbol} before {as_of_date}.")
-    filing = max(eligible, key=lambda item: (item.filing_date, item.accession_number))
+    filing = _latest_filing_before(archive, symbol, cutoff)
     company_facts = archive.company_facts_by_ticker[symbol]
 
     price_rows = [
@@ -359,6 +431,167 @@ def render_point_in_time_fundamentals(
         ),
     ]
     return "\n".join(lines)
+
+
+def render_point_in_time_balance_sheet(
+    archive: SecArchive,
+    ticker: str,
+    as_of_date: str,
+) -> str:
+    """Render the latest balance sheet disclosed before one replay date."""
+    symbol = ticker.upper().strip()
+    cutoff = _parse_date(as_of_date)
+    filing = _latest_filing_before(archive, symbol, cutoff)
+    company_facts = archive.company_facts_by_ticker[symbol]
+
+    asset_facts = [
+        fact
+        for fact in _fact_candidates(company_facts, filing, ("Assets",), "USD")
+        if fact.start_date is None and fact.end_date <= filing.report_date
+    ]
+    periods = tuple(sorted({fact.end_date for fact in asset_facts}, reverse=True)[:2])
+    if not periods or periods[0] != filing.report_date:
+        raise RuntimeError(
+            f"SEC filing {filing.accession_number} has no current balance-sheet period."
+        )
+
+    rendered_rows: list[tuple[str, list[str]]] = []
+    facts_by_label: dict[str, list[SecFact | None]] = {}
+    for line in BALANCE_SHEET_LINES:
+        facts = [
+            _instant_fact_for_period(
+                company_facts,
+                filing,
+                line.concepts,
+                period,
+                required=line.required and period == periods[0],
+            )
+            for period in periods
+        ]
+        if any(fact is not None for fact in facts):
+            facts_by_label[line.label] = facts
+            rendered_rows.append(
+                (
+                    line.label,
+                    [
+                        "" if fact is None else _format_number(fact.value)
+                        for fact in facts
+                    ],
+                )
+            )
+
+    assets = facts_by_label["Total assets"]
+    equity = facts_by_label["Stockholders' equity"]
+    liabilities_and_equity = facts_by_label[
+        "Total liabilities and stockholders' equity"
+    ]
+    liabilities: list[SecFact | None] = [
+        _instant_fact_for_period(
+            company_facts,
+            filing,
+            ("Liabilities",),
+            period,
+            required=False,
+        )
+        for period in periods
+    ]
+    liabilities_derived = False
+    for index, period in enumerate(periods):
+        if (
+            liabilities[index] is None
+            and assets[index] is not None
+            and equity[index] is not None
+        ):
+            liabilities[index] = SecFact(
+                concept="Assets minus StockholdersEquity",
+                value=assets[index].value - equity[index].value,
+                unit="USD",
+                start_date=None,
+                end_date=period,
+            )
+            liabilities_derived = True
+    if liabilities[0] is None:
+        raise RuntimeError(
+            f"SEC filing {filing.accession_number} has no usable total liabilities."
+        )
+
+    for index, period in enumerate(periods):
+        period_assets = assets[index]
+        period_equity = equity[index]
+        period_liabilities = liabilities[index]
+        period_total = liabilities_and_equity[index]
+        if period_assets is None or period_total is None:
+            continue
+        tolerance = max(1.0, abs(period_assets.value) * 1e-9)
+        if abs(period_assets.value - period_total.value) > tolerance:
+            raise RuntimeError(
+                f"SEC filing {filing.accession_number} has an unbalanced statement "
+                f"for {period.isoformat()}."
+            )
+        if period_liabilities is not None and period_liabilities.value < 0:
+            raise RuntimeError(
+                f"SEC filing {filing.accession_number} has negative liabilities "
+                f"for {period.isoformat()}."
+            )
+        if (
+            period_liabilities is not None
+            and period_equity is not None
+            and abs(
+                period_assets.value
+                - period_liabilities.value
+                - period_equity.value
+            )
+            > tolerance
+        ):
+            raise RuntimeError(
+                f"SEC filing {filing.accession_number} has inconsistent accounting "
+                f"totals for {period.isoformat()}."
+            )
+
+    liabilities_label = "Total liabilities"
+    if liabilities_derived:
+        liabilities_label += " (derived as assets minus equity where unavailable)"
+    liability_row = (
+        liabilities_label,
+        ["" if fact is None else _format_number(fact.value) for fact in liabilities],
+    )
+    equity_index = next(
+        index
+        for index, (label, _) in enumerate(rendered_rows)
+        if label == "Stockholders' equity"
+    )
+    rendered_rows.insert(equity_index, liability_row)
+
+    output = io.StringIO()
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(("line_item", *(period.isoformat() for period in periods)))
+    for label, values in rendered_rows:
+        writer.writerow((label, *values))
+    table = output.getvalue().strip()
+    return "\n".join(
+        (
+            f"Point-in-time balance sheet for {symbol} as of {as_of_date}.",
+            "Source: SEC EDGAR Company Facts and archived filing package.",
+            (
+                f"Source filing: {filing.form} filed {filing.filing_date.isoformat()}, "
+                f"period ended {filing.report_date.isoformat()}, accession "
+                f"{filing.accession_number}."
+            ),
+            (
+                f"Rows covered: {len(rendered_rows)}. "
+                f"Periods covered: {len(periods)}. Values are USD."
+            ),
+            table,
+        )
+    )
+
+
+def _latest_filing_before(archive: SecArchive, symbol: str, cutoff: date) -> SecFiling:
+    filings = archive.filings_by_ticker.get(symbol, ())
+    eligible = [filing for filing in filings if filing.filing_date < cutoff]
+    if not eligible:
+        raise RuntimeError(f"No SEC filing for {symbol} before {cutoff.isoformat()}.")
+    return max(eligible, key=lambda item: (item.filing_date, item.accession_number))
 
 
 def _download_json(
@@ -589,10 +822,29 @@ def _instant_fact(
     *,
     required: bool = True,
 ) -> SecFact | None:
+    return _instant_fact_for_period(
+        company_facts,
+        filing,
+        concepts,
+        filing.report_date,
+        unit=unit,
+        required=required,
+    )
+
+
+def _instant_fact_for_period(
+    company_facts: dict[str, Any],
+    filing: SecFiling,
+    concepts: Sequence[str],
+    period: date,
+    *,
+    unit: str = "USD",
+    required: bool = True,
+) -> SecFact | None:
     candidates = [
         fact
         for fact in _fact_candidates(company_facts, filing, concepts, unit)
-        if fact.start_date is None and fact.end_date == filing.report_date
+        if fact.start_date is None and fact.end_date == period
     ]
     if not candidates:
         if not required:
@@ -600,7 +852,17 @@ def _instant_fact(
         raise RuntimeError(
             f"SEC filing {filing.accession_number} has no usable {concepts[0]} fact."
         )
-    return min(candidates, key=lambda fact: concepts.index(fact.concept))
+    best_concept = min(concepts.index(fact.concept) for fact in candidates)
+    preferred = [
+        fact for fact in candidates if concepts.index(fact.concept) == best_concept
+    ]
+    values = {fact.value for fact in preferred}
+    if len(values) != 1:
+        raise RuntimeError(
+            f"SEC filing {filing.accession_number} has conflicting "
+            f"{concepts[best_concept]} facts for {period.isoformat()}."
+        )
+    return preferred[0]
 
 
 def _shares_fact(company_facts: dict[str, Any], filing: SecFiling) -> SecFact:
