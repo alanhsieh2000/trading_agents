@@ -729,6 +729,8 @@ def build_reddit_outputs(
             subreddits=subreddits,
             request_delay_seconds=options.reddit_request_delay_seconds,
         )
+    last_trade_date = max(_parse_date(value) for value in transaction_days)
+    posts = [post for post in posts if post.published_date <= last_trade_date]
     dataset.put_reddit_posts([_reddit_post_row(post) for post in posts])
 
     payload_rows: list[tuple[str, str, str, str]] = []

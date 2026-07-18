@@ -631,7 +631,7 @@ def test_fetch_reddit_posts_for_dataset_or_joins_aliases_and_keeps_all(monkeypat
     assert sleeps == [10.0, 10.0, 10.0]
 
 
-def test_build_reddit_outputs_stores_all_posts_but_limits_replay_payload(
+def test_build_reddit_outputs_stores_posts_through_last_trade_and_limits_payload(
     monkeypatch, tmp_path
 ):
     posts = [
@@ -639,6 +639,7 @@ def test_build_reddit_outputs_stores_all_posts_but_limits_replay_payload(
         _reddit_post("AAPL", "stocks", "2026-01-02", "new"),
         _reddit_post("AAPL", "investing", "2026-01-02", "investing"),
         _reddit_post("GOOGL", "stocks", "2026-01-02", "googl"),
+        _reddit_post("GOOGL", "stocks", "2026-01-03", "future"),
     ]
 
     monkeypatch.setattr(
@@ -673,10 +674,12 @@ def test_build_reddit_outputs_stores_all_posts_but_limits_replay_payload(
     assert result.posts_written == 4
     assert result.payloads_written == 2
     assert len(raw_rows) == 4
+    assert all(row["published_date"] <= "2026-01-02" for row in raw_rows)
     assert "new" in aapl_payload
     assert "old" not in aapl_payload
     assert "investing" in aapl_payload
     assert "googl" in googl_payload
+    assert "future" not in googl_payload
 
 
 def _stocktwits_payload(
