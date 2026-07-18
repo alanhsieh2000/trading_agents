@@ -126,12 +126,12 @@ makes the evaluation reproducible and offline (apart from the language-model cal
   complete and no stored API/runtime errors were found, but the dataset is not ready:
   confirmed future/unrelated ticker and global news contaminates multiple rows;
   and 133 unused GOOGL raw Reddit posts are dated in 2025-12-19..2026-02-13.
-- [ ] (pending) Resolve the remaining dataset-readiness audit findings before the smoke evaluation:
-  repair or exclude remaining future or later-injected ticker-news and contaminated global-news
-  blocks. The audited
-  unrelated and post-trade-published ticker-news blocks, Reddit replay-output, indicator
-  warm-up, fundamentals, all financial-statement findings, and future raw Reddit rows are
-  resolved; the other news cleanup remains separate.
+- [x] (2026-07-18 12:14Z) Resolved the dataset-readiness audit findings: repaired the
+  audited unrelated, post-trade-published, and later-injected ticker-news and
+  global-news blocks; rebuilt Reddit replay outputs; corrected indicator warm-up;
+  replaced fundamentals and financial statements with point-in-time SEC data; and
+  removed future-dated raw Reddit rows. The prepared dataset is ready for smoke
+  evaluation.
 - [ ] (pending) Run the full evaluation and record CR per stock in `Outcomes & Retrospective`.
 
 Use timestamps (for example `(2026-06-11 09:00Z)`) when checking items off so a
@@ -191,7 +191,8 @@ future contributor can gauge the rate of progress.
   five years of calculation warm-up and a complete replay refresh. The fundamentals
   finding was resolved the same day with SEC-backed point-in-time payloads. The balance-sheet
   balance-sheet, cash-flow, and income-statement findings were resolved on 2026-07-18
-  with SEC-backed statements; news and future raw-Reddit findings still block readiness.
+  with SEC-backed statements. The news and future raw-Reddit findings were also
+  resolved on 2026-07-18, leaving the dataset ready for smoke evaluation.
 - Observation: The original TradingAgents repository works around Reddit JSON
   blocking by using Reddit RSS/Atom search first.
   Evidence: `https://github.com/TauricResearch/TradingAgents/blob/main/tradingagents/dataflows/reddit.py`
