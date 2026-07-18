@@ -60,6 +60,17 @@ makes the evaluation reproducible and offline (apart from the language-model cal
   and `tests/test_eval_dataset.py` reported 11 passed. Future-dated, post-trade,
   competitor, partner, regulatory, and broadly relevant articles were intentionally
   retained unless they were one of the audited unrelated blocks.
+- [x] (2026-07-18) Repaired the audited post-trade-publication contamination in
+  canonical `get_news` payloads without calling Exa. Using publication date only,
+  atomically removed exactly ten complete article blocks from ten ticker/date rows and
+  verified all 1,881 non-target tool-output rows remained byte-identical. All 183
+  `get_news` rows remain; their ordered content hashes to
+  `87eade356edc610e0ccc74f8138e7e58e7c4eebf13e6519ce5a7bba708608797`,
+  the DuckDB hashes to
+  `ed20626ea0ffb3f777aa26e09845c34ec693ad81fac27a23faa451ba8616e92b`,
+  and `tests/test_eval_dataset.py` reported 11 passed. Pre-trade publications that
+  discuss future events or whose stored summaries contain later injected page content
+  were intentionally retained for separate review.
 - [x] (2026-06-17) Implemented and populated shared dataset building for `get_global_news`: records one Exa historical global-market-news payload per trading day, stores it under each evaluated ticker key for existing dataset-backed tool replay, and uses a doubled global-news limit (`settings.news.global_limit * 2`, currently 20). Wrote 183 persistent `get_global_news` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-21`; the evaluation-backed `get_global_news` tool matched the DuckDB payload exactly and returned the shared global payload for all ticker keys on that date.
 - [x] (2026-07-17 07:40Z) Implemented canonical dataset building for `fetch_reddit_posts`: validates all retained Arctic Shift pages and required fields, requires every configured ticker/subreddit stream and full replay-window coverage, deduplicates by ticker/post ID, and renders rich date/score/comment/title/body payloads without network calls. Extended raw Reddit rows to retain source IDs and engagement counts. Ingested 1,051 unique posts and 183 tool payloads into `data/eval_dataset.duckdb` (61 each for AAPL, GOOGL, and AMZN). Focused tests reported 37 passed.
 - [x] (2026-07-17 13:30Z) Aligned live and replay Reddit output with upstream recent-post semantics: removed score/comment quality gates, retained the configurable five-post-per-subreddit default, added upstream named empty-subreddit and all-empty messages, and atomically regenerated all 183 Reddit payloads from the local Arctic Shift archive. All 183 prior payloads changed; all now contain recent posts, 26 named partial-empty blocks remain, and zero old no-data or blank-subreddit blocks remain. The full suite reports 190 passed.
@@ -87,11 +98,11 @@ makes the evaluation reproducible and offline (apart from the language-model cal
   confirmed future/unrelated ticker and global news contaminates multiple rows;
   and 133 unused GOOGL raw Reddit posts are dated in 2025-12-19..2026-02-13.
 - [ ] (pending) Resolve the remaining dataset-readiness audit findings before the smoke evaluation:
-  repair or exclude remaining future/post-trade ticker-news and contaminated global-news
+  repair or exclude remaining future or later-injected ticker-news and contaminated global-news
   blocks, and remove future raw Reddit rows from the canonical artifact. The audited
-  unrelated ticker-news blocks, Reddit replay-output, indicator warm-up, fundamentals,
-  and all financial-statement findings are resolved; the other news and future raw-row
-  cleanup remains separate.
+  unrelated and post-trade-published ticker-news blocks, Reddit replay-output, indicator
+  warm-up, fundamentals, and all financial-statement findings are resolved; the other
+  news and future raw-row cleanup remains separate.
 - [ ] (pending) Run the full evaluation and record CR per stock in `Outcomes & Retrospective`.
 
 Use timestamps (for example `(2026-06-11 09:00Z)`) when checking items off so a
