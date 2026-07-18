@@ -48,6 +48,18 @@ makes the evaluation reproducible and offline (apart from the language-model cal
 - [x] (2026-06-17) Implemented and populated dataset building for `get_indicators`: records all allowed indicators from `src/trading_agents/tools/market_data.py` for each configured ticker and trading day using the analyst-stage lookback window. Wrote 183 persistent `get_indicators` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero SPY indicator rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison matched for `AMZN` on `2024-02-27` with 12 indicators.
 - [x] (2026-07-17 14:36Z) Corrected live and replay indicator warm-up: calculations now use five years of pre-window OHLCV and trim output back to the requested seven-day range. The builder downloads once per ticker, requires at least 200 observations through the first displayed date, renders all replacements before an atomic write, and regenerated all 183 indicator payloads. The audit found zero blank indicator cells, boundary errors, row-count errors, or fresh-render mismatches; focused validation reports 74 passed and the full suite reports 192 passed.
 - [x] (2026-06-17 13:03Z) Implemented and populated shared dataset building for `get_news`: records ticker-news text through the Exa historical source layer with the same markdown/no-news/error contract as the live Yahoo-backed tool. The builder uses a doubled news limit (`settings.news.ticker_limit * 2`, currently 40) for buffer coverage, writes ticker rows only, and shares the same implementation with Plan B. Wrote 183 persistent `get_news` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AMZN on `2024-03-05`; the evaluation-backed `get_news` tool matched the DuckDB payload exactly and returned 39 articles for `2024-02-27..2024-03-05`.
+- [x] (2026-07-18) Repaired the audited unrelated-content contamination in canonical
+  `get_news` payloads without calling Exa. Atomically removed exactly 91 complete article
+  blocks from 28 ticker/date rows while preserving the heading, article order, all other
+  article bytes, and all 1,863 non-target tool-output rows. The 29th audited row, AAPL on
+  `2024-03-25`, remained unchanged because it had no clearly unrelated article. All 183
+  `get_news` rows remain; their ordered content hashes to
+  `530cb77282ff60ec32ede791abd44bbad9647e6fe527713fbe4eb79137ad7c32`,
+  the DuckDB hashes to
+  `0012b679ace8198dbef5cebf4c20d012f0cce7462f35936d97ab6ccdc8c703cd`,
+  and `tests/test_eval_dataset.py` reported 11 passed. Future-dated, post-trade,
+  competitor, partner, regulatory, and broadly relevant articles were intentionally
+  retained unless they were one of the audited unrelated blocks.
 - [x] (2026-06-17) Implemented and populated shared dataset building for `get_global_news`: records one Exa historical global-market-news payload per trading day, stores it under each evaluated ticker key for existing dataset-backed tool replay, and uses a doubled global-news limit (`settings.news.global_limit * 2`, currently 20). Wrote 183 persistent `get_global_news` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-21`; the evaluation-backed `get_global_news` tool matched the DuckDB payload exactly and returned the shared global payload for all ticker keys on that date.
 - [x] (2026-07-17 07:40Z) Implemented canonical dataset building for `fetch_reddit_posts`: validates all retained Arctic Shift pages and required fields, requires every configured ticker/subreddit stream and full replay-window coverage, deduplicates by ticker/post ID, and renders rich date/score/comment/title/body payloads without network calls. Extended raw Reddit rows to retain source IDs and engagement counts. Ingested 1,051 unique posts and 183 tool payloads into `data/eval_dataset.duckdb` (61 each for AAPL, GOOGL, and AMZN). Focused tests reported 37 passed.
 - [x] (2026-07-17 13:30Z) Aligned live and replay Reddit output with upstream recent-post semantics: removed score/comment quality gates, retained the configurable five-post-per-subreddit default, added upstream named empty-subreddit and all-empty messages, and atomically regenerated all 183 Reddit payloads from the local Arctic Shift archive. All 183 prior payloads changed; all now contain recent posts, 26 named partial-empty blocks remain, and zero old no-data or blank-subreddit blocks remain. The full suite reports 190 passed.
@@ -75,9 +87,10 @@ makes the evaluation reproducible and offline (apart from the language-model cal
   confirmed future/unrelated ticker and global news contaminates multiple rows;
   and 133 unused GOOGL raw Reddit posts are dated in 2025-12-19..2026-02-13.
 - [ ] (pending) Resolve the remaining dataset-readiness audit findings before the smoke evaluation:
-  repair or exclude contaminated news blocks, and remove future raw Reddit rows from the canonical
-  artifact. The Reddit replay-output, indicator warm-up, and fundamentals findings are
-  resolved; all financial-statement findings are resolved, and the future raw-row
+  repair or exclude remaining future/post-trade ticker-news and contaminated global-news
+  blocks, and remove future raw Reddit rows from the canonical artifact. The audited
+  unrelated ticker-news blocks, Reddit replay-output, indicator warm-up, fundamentals,
+  and all financial-statement findings are resolved; the other news and future raw-row
   cleanup remains separate.
 - [ ] (pending) Run the full evaluation and record CR per stock in `Outcomes & Retrospective`.
 
