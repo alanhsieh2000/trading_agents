@@ -71,6 +71,20 @@ makes the evaluation reproducible and offline (apart from the language-model cal
   and `tests/test_eval_dataset.py` reported 11 passed. Pre-trade publications that
   discuss future events or whose stored summaries contain later injected page content
   were intentionally retained for separate review.
+- [x] (2026-07-18 11:43Z) Repaired the audited later-injected-content contamination in
+  canonical `get_news` payloads without calling Exa. Atomically removed exactly ten
+  complete article blocks from six ticker/date rows while preserving the heading,
+  article order, and every retained article byte-for-byte. The repaired rows retain 31,
+  33, 36, 37, 35, and 35 articles for AMZN `2024-01-02`, `2024-02-06`, `2024-02-15`,
+  `2024-02-22` and GOOGL `2024-01-02`, `2024-02-15`, respectively. All 1,885 non-target
+  tool-output rows remained byte-identical at SHA-256
+  `cb3704b4cd91dc9e6d229414b125af27c5d5cf534f3ef1e2a75cba5c7b4ade03`; the 183
+  ordered `get_news` rows hash to
+  `66f3ff7f162a788a923208a0f8cdb69e9bc6c78e2f00150cbdd548bf29b4ff84`, and the
+  DuckDB hashes to
+  `eb285cbc7c45584bc22f2b9bebaa840ac3244f2b79ea386d584206a48056543a`.
+  Legitimate pre-trade articles discussing future events remain unchanged, and
+  `tests/test_eval_dataset.py` reported 11 passed.
 - [x] (2026-06-17) Implemented and populated shared dataset building for `get_global_news`: records one Exa historical global-market-news payload per trading day, stores it under each evaluated ticker key for existing dataset-backed tool replay, and uses a doubled global-news limit (`settings.news.global_limit * 2`, currently 20). Wrote 183 persistent `get_global_news` rows to `data/eval_dataset.duckdb`: AAPL 61, GOOGL 61, AMZN 61, with zero error payloads and zero no-news fallback rows. Focused validation passed with `uv run pytest tests/test_eval_build_dataset.py tests/test_eval_exa_sources.py tests/test_eval_dataset.py tests/test_eval_backtest.py tests/test_trading_tools.py`. Random replay comparison used AAPL on `2024-03-21`; the evaluation-backed `get_global_news` tool matched the DuckDB payload exactly and returned the shared global payload for all ticker keys on that date.
 - [x] (2026-07-17 07:40Z) Implemented canonical dataset building for `fetch_reddit_posts`: validates all retained Arctic Shift pages and required fields, requires every configured ticker/subreddit stream and full replay-window coverage, deduplicates by ticker/post ID, and renders rich date/score/comment/title/body payloads without network calls. Extended raw Reddit rows to retain source IDs and engagement counts. Ingested 1,051 unique posts and 183 tool payloads into `data/eval_dataset.duckdb` (61 each for AAPL, GOOGL, and AMZN). Focused tests reported 37 passed.
 - [x] (2026-07-17 13:30Z) Aligned live and replay Reddit output with upstream recent-post semantics: removed score/comment quality gates, retained the configurable five-post-per-subreddit default, added upstream named empty-subreddit and all-empty messages, and atomically regenerated all 183 Reddit payloads from the local Arctic Shift archive. All 183 prior payloads changed; all now contain recent posts, 26 named partial-empty blocks remain, and zero old no-data or blank-subreddit blocks remain. The full suite reports 190 passed.
