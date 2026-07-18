@@ -12,7 +12,6 @@ import argparse
 import hashlib
 import json
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -37,8 +36,8 @@ from trading_agents.evaluation.sec_sources import (
     render_point_in_time_balance_sheet,
     render_point_in_time_cashflow,
     render_point_in_time_fundamentals,
+    render_point_in_time_income_statement,
 )
-from trading_agents.tools.fundamentals import get_statement_text
 from trading_agents.tools.market_data import (
     ALLOWED_INDICATORS,
     INDICATOR_MIN_WARMUP_ROWS,
@@ -1043,39 +1042,6 @@ def build_stocktwits_outputs(
     )
 
 
-def build_snapshot_tool_outputs(
-    *,
-    tool_name: str,
-    render_payload: Callable[[str], str],
-    options: BuildDatasetOptions,
-    dataset: EvalDataset,
-    transaction_days: Sequence[str],
-) -> ToolOutputBuildResult:
-    """Record replayable snapshot payloads for each ticker and day.
-
-    Several yfinance fundamentals endpoints expose latest available snapshots
-    rather than point-in-time daily history. Fetch once per ticker and record
-    the same payload for every replay date so evaluation mode and normal mode
-    see the same tool text shape.
-    """
-    symbols = _symbols_for_indicator_outputs(options)
-    payloads_written = 0
-
-    for symbol in symbols:
-        payload = render_payload(symbol)
-        for as_of_date in transaction_days:
-            dataset.put_tool_output(tool_name, symbol, as_of_date, payload)
-            payloads_written += 1
-
-    return ToolOutputBuildResult(
-        tool_name=tool_name,
-        symbols=symbols,
-        payloads_written=payloads_written,
-        transaction_days=tuple(transaction_days),
-        lookback_days=0,
-    )
-
-
 def build_fundamentals_outputs(
     options: BuildDatasetOptions,
     dataset: EvalDataset,
@@ -1206,15 +1172,41 @@ def build_income_statement_outputs(
     dataset: EvalDataset,
     transaction_days: Sequence[str],
 ) -> ToolOutputBuildResult:
-    """Record replayable ``get_income_statement`` payloads for each ticker and day."""
-    return build_snapshot_tool_outputs(
+    """Record point-in-time SEC income statements for each ticker and day."""
+    symbols = _symbols_for_indicator_outputs(options)
+    if not transaction_days:
+        return ToolOutputBuildResult(
+            tool_name="get_income_statement",
+            symbols=symbols,
+            payloads_written=0,
+            transaction_days=(),
+            lookback_days=0,
+        )
+
+    archive = ensure_sec_archive(symbols, transaction_days)
+    payload_rows: list[tuple[str, str, str, str]] = []
+    for symbol in symbols:
+        for as_of_date in transaction_days:
+            payload = render_point_in_time_income_statement(
+                archive, symbol, as_of_date
+            )
+            if not payload.startswith(
+                f"Point-in-time income statement for {symbol} as of {as_of_date}."
+            ):
+                raise RuntimeError(
+                    f"Could not render SEC income statement for {symbol} on {as_of_date}."
+                )
+            payload_rows.append(
+                ("get_income_statement", symbol, as_of_date, payload)
+            )
+
+    dataset.put_tool_outputs(payload_rows)
+    return ToolOutputBuildResult(
         tool_name="get_income_statement",
-        render_payload=lambda ticker: get_statement_text(
-            ticker, "Income statement", "income_stmt"
-        ),
-        options=options,
-        dataset=dataset,
-        transaction_days=transaction_days,
+        symbols=symbols,
+        payloads_written=len(payload_rows),
+        transaction_days=tuple(transaction_days),
+        lookback_days=0,
     )
 
 

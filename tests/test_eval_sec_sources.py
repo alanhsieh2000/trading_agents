@@ -488,6 +488,192 @@ def test_render_point_in_time_cashflow_rejects_conflicting_facts(tmp_path):
         sec_sources.render_point_in_time_cashflow(archive, "TEST", "2024-02-01")
 
 
+def _add_income_period(
+    facts,
+    accession,
+    start,
+    end,
+    *,
+    revenue=100,
+    cost=60,
+    gross=40,
+    operating=20,
+    pretax=15,
+    tax=3,
+    net=12,
+    diluted_eps=1.2,
+    diluted_shares=10,
+):
+    values = (
+        ("Revenues", "USD", revenue),
+        ("CostOfRevenue", "USD", cost),
+        ("GrossProfit", "USD", gross),
+        ("OperatingIncomeLoss", "USD", operating),
+        (
+            "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+            "USD",
+            pretax,
+        ),
+        ("IncomeTaxExpenseBenefit", "USD", tax),
+        ("NetIncomeLoss", "USD", net),
+        ("EarningsPerShareDiluted", "USD/shares", diluted_eps),
+        ("WeightedAverageNumberOfDilutedSharesOutstanding", "shares", diluted_shares),
+    )
+    for concept, unit, value in values:
+        _add_fact(
+            facts,
+            "us-gaap",
+            concept,
+            unit,
+            accession,
+            value,
+            end,
+            start=start,
+        )
+
+
+def test_render_point_in_time_income_statement_selects_quarterly_periods(tmp_path):
+    old = sec_sources.SecFiling(
+        "TEST",
+        "0000000001",
+        "old",
+        "10-Q",
+        date(2023, 10, 25),
+        date(2023, 9, 30),
+        "old.htm",
+    )
+    new = sec_sources.SecFiling(
+        "TEST",
+        "0000000001",
+        "new",
+        "10-K",
+        date(2024, 1, 31),
+        date(2023, 12, 31),
+        "new.htm",
+    )
+    facts = {"cik": 1, "facts": {}}
+    for start, end, revenue in (
+        ("2023-07-01", "2023-09-30", 100),
+        ("2022-07-01", "2022-09-30", 90),
+        ("2023-01-01", "2023-09-30", 300),
+        ("2022-10-01", "2023-09-30", 400),
+    ):
+        _add_income_period(
+            facts["facts"], "old", start, end, revenue=revenue, cost=revenue - 40
+        )
+    for year, revenue in ((2023, 120), (2022, 110), (2021, 100)):
+        _add_income_period(
+            facts["facts"],
+            "new",
+            f"{year}-01-01",
+            f"{year}-12-31",
+            revenue=revenue,
+            cost=revenue - 40,
+        )
+    archive = sec_sources.SecArchive(
+        tmp_path,
+        {"TEST": (old, new)},
+        {"TEST": facts},
+    )
+
+    same_day = sec_sources.render_point_in_time_income_statement(
+        archive, "TEST", "2024-01-31"
+    )
+    next_day = sec_sources.render_point_in_time_income_statement(
+        archive, "TEST", "2024-02-01"
+    )
+
+    assert "Source filing: 10-Q filed 2023-10-25" in same_day
+    assert (
+        "line_item,2023-07-01..2023-09-30,2022-07-01..2022-09-30"
+        in same_day
+    )
+    assert "2023-01-01..2023-09-30" not in same_day
+    assert "2022-10-01..2023-09-30" not in same_day
+    assert "Source filing: 10-K filed 2024-01-31" in next_day
+    assert (
+        "line_item,2023-01-01..2023-12-31,2022-01-01..2022-12-31,"
+        "2021-01-01..2021-12-31" in next_day
+    )
+    assert "Revenue,120,110,100" in next_day
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error"),
+    (
+        ({"gross": 30}, "inconsistent gross profit"),
+        ({"net": 5}, "inconsistent net income"),
+        ({"diluted_eps": 5}, "inconsistent diluted EPS"),
+    ),
+)
+def test_render_point_in_time_income_statement_validates_arithmetic(
+    tmp_path, overrides, error
+):
+    filing = sec_sources.SecFiling(
+        "TEST",
+        "0000000001",
+        "accn",
+        "10-K",
+        date(2024, 1, 31),
+        date(2023, 12, 31),
+        "test.htm",
+    )
+    facts = {"cik": 1, "facts": {}}
+    _add_income_period(
+        facts["facts"],
+        "accn",
+        "2023-01-01",
+        "2023-12-31",
+        **overrides,
+    )
+    archive = sec_sources.SecArchive(
+        tmp_path,
+        {"TEST": (filing,)},
+        {"TEST": facts},
+    )
+
+    with pytest.raises(RuntimeError, match=error):
+        sec_sources.render_point_in_time_income_statement(
+            archive, "TEST", "2024-02-01"
+        )
+
+
+def test_render_point_in_time_income_statement_rejects_conflicting_facts(tmp_path):
+    filing = sec_sources.SecFiling(
+        "TEST",
+        "0000000001",
+        "accn",
+        "10-K",
+        date(2024, 1, 31),
+        date(2023, 12, 31),
+        "test.htm",
+    )
+    facts = {"cik": 1, "facts": {}}
+    _add_income_period(
+        facts["facts"], "accn", "2023-01-01", "2023-12-31"
+    )
+    _add_fact(
+        facts["facts"],
+        "us-gaap",
+        "Revenues",
+        "USD",
+        "accn",
+        999,
+        "2023-12-31",
+        start="2023-01-01",
+    )
+    archive = sec_sources.SecArchive(
+        tmp_path,
+        {"TEST": (filing,)},
+        {"TEST": facts},
+    )
+
+    with pytest.raises(RuntimeError, match="conflicting Revenues facts"):
+        sec_sources.render_point_in_time_income_statement(
+            archive, "TEST", "2024-02-01"
+        )
+
+
 def test_duration_fact_prefers_quarter_over_year_to_date():
     filing = sec_sources.SecFiling(
         "TEST",

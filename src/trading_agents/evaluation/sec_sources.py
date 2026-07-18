@@ -78,7 +78,15 @@ class CashFlowLine:
 
 
 @dataclass(frozen=True)
-class CashFlowPeriod:
+class IncomeStatementLine:
+    label: str
+    concepts: tuple[str, ...]
+    unit: str = "USD"
+    required: bool = False
+
+
+@dataclass(frozen=True)
+class DurationPeriod:
     start_date: date
     end_date: date
 
@@ -212,6 +220,78 @@ CASH_FLOW_LINES = (
             "CashAndCashEquivalentsPeriodIncreaseDecrease",
         ),
         required=True,
+    ),
+)
+
+INCOME_STATEMENT_LINES = (
+    IncomeStatementLine(
+        "Revenue",
+        (
+            "RevenueFromContractWithCustomerExcludingAssessedTax",
+            "Revenues",
+            "SalesRevenueNet",
+        ),
+        required=True,
+    ),
+    IncomeStatementLine(
+        "Cost of revenue", ("CostOfRevenue", "CostOfGoodsAndServicesSold")
+    ),
+    IncomeStatementLine("Gross profit", ("GrossProfit",)),
+    IncomeStatementLine(
+        "Research and development", ("ResearchAndDevelopmentExpense",)
+    ),
+    IncomeStatementLine(
+        "Selling, general and administrative",
+        ("SellingGeneralAndAdministrativeExpense",),
+    ),
+    IncomeStatementLine("Operating expenses", ("OperatingExpenses",)),
+    IncomeStatementLine(
+        "Operating income", ("OperatingIncomeLoss",), required=True
+    ),
+    IncomeStatementLine(
+        "Interest income",
+        (
+            "InterestIncomeExpenseNonoperatingNet",
+            "InvestmentIncomeInterest",
+            "InterestIncomeOther",
+        ),
+    ),
+    IncomeStatementLine(
+        "Interest expense", ("InterestExpenseNonOperating", "InterestExpense")
+    ),
+    IncomeStatementLine(
+        "Nonoperating income (expense)", ("NonoperatingIncomeExpense",)
+    ),
+    IncomeStatementLine(
+        "Income before income taxes",
+        (
+            "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+            "IncomeLossFromContinuingOperationsBeforeEquityMethodInvestmentsIncomeTaxesNoncontrollingInterest",
+            "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+        ),
+        required=True,
+    ),
+    IncomeStatementLine(
+        "Income tax expense (benefit)", ("IncomeTaxExpenseBenefit",), required=True
+    ),
+    IncomeStatementLine("Net income", ("NetIncomeLoss",), required=True),
+    IncomeStatementLine(
+        "Basic earnings per share", ("EarningsPerShareBasic",), unit="USD/shares"
+    ),
+    IncomeStatementLine(
+        "Diluted earnings per share",
+        ("EarningsPerShareDiluted",),
+        unit="USD/shares",
+    ),
+    IncomeStatementLine(
+        "Basic weighted-average shares",
+        ("WeightedAverageNumberOfSharesOutstandingBasic",),
+        unit="shares",
+    ),
+    IncomeStatementLine(
+        "Diluted weighted-average shares",
+        ("WeightedAverageNumberOfDilutedSharesOutstanding",),
+        unit="shares",
     ),
 )
 
@@ -745,13 +825,13 @@ def render_point_in_time_cashflow(
         if abs(reconciled_change - net_change[index].value) > tolerance:
             raise RuntimeError(
                 f"SEC filing {filing.accession_number} has an unreconciled cash "
-                f"change for {_format_cash_flow_period(period)}."
+                f"change for {_format_duration_period(period)}."
             )
 
     output = io.StringIO()
     writer = csv.writer(output, lineterminator="\n")
     writer.writerow(
-        ("line_item", *(_format_cash_flow_period(period) for period in periods))
+        ("line_item", *(_format_duration_period(period) for period in periods))
     )
     for label, values in rendered_rows:
         writer.writerow((label, *values))
@@ -777,7 +857,7 @@ def render_point_in_time_cashflow(
 
 def _cash_flow_periods(
     company_facts: dict[str, Any], filing: SecFiling
-) -> tuple[CashFlowPeriod, ...]:
+) -> tuple[DurationPeriod, ...]:
     anchors = [
         fact
         for fact in _fact_candidates(
@@ -814,7 +894,7 @@ def _cash_flow_periods(
         )
     target_days = (current.end_date - current.start_date).days
 
-    candidates: set[CashFlowPeriod] = set()
+    candidates: set[DurationPeriod] = set()
     for fact in anchors:
         duration_days = (fact.end_date - fact.start_date).days
         matching_duration = (
@@ -823,7 +903,7 @@ def _cash_flow_periods(
             else abs(duration_days - target_days) <= 15
         )
         if matching_duration:
-            candidates.add(CashFlowPeriod(fact.start_date, fact.end_date))
+            candidates.add(DurationPeriod(fact.start_date, fact.end_date))
     limit = 3 if filing.form == "10-K" else 2
     periods = tuple(
         sorted(
@@ -832,7 +912,7 @@ def _cash_flow_periods(
             reverse=True,
         )[:limit]
     )
-    if not periods or periods[0] != CashFlowPeriod(
+    if not periods or periods[0] != DurationPeriod(
         current.start_date, current.end_date
     ):
         raise RuntimeError(
@@ -841,8 +921,192 @@ def _cash_flow_periods(
     return periods
 
 
-def _format_cash_flow_period(period: CashFlowPeriod) -> str:
+def _format_duration_period(period: DurationPeriod) -> str:
     return f"{period.start_date.isoformat()}..{period.end_date.isoformat()}"
+
+
+def render_point_in_time_income_statement(
+    archive: SecArchive,
+    ticker: str,
+    as_of_date: str,
+) -> str:
+    """Render the latest income statement disclosed before one replay date."""
+    symbol = ticker.upper().strip()
+    cutoff = _parse_date(as_of_date)
+    filing = _latest_filing_before(archive, symbol, cutoff)
+    company_facts = archive.company_facts_by_ticker[symbol]
+    periods = _income_statement_periods(company_facts, filing)
+
+    rendered_rows: list[tuple[str, list[str]]] = []
+    facts_by_label: dict[str, list[SecFact | None]] = {}
+    for line in INCOME_STATEMENT_LINES:
+        facts = [
+            _duration_fact_for_period(
+                company_facts,
+                filing,
+                line.concepts,
+                period,
+                unit=line.unit,
+                required=line.required,
+            )
+            for period in periods
+        ]
+        if any(fact is not None for fact in facts):
+            facts_by_label[line.label] = facts
+            rendered_rows.append(
+                (
+                    line.label,
+                    [
+                        "" if fact is None else _format_number(fact.value)
+                        for fact in facts
+                    ],
+                )
+            )
+
+    revenue = facts_by_label["Revenue"]
+    cost_of_revenue = facts_by_label.get("Cost of revenue")
+    gross_profit = facts_by_label.get("Gross profit")
+    pretax_income = facts_by_label["Income before income taxes"]
+    income_tax = facts_by_label["Income tax expense (benefit)"]
+    net_income = facts_by_label["Net income"]
+    diluted_eps = facts_by_label.get("Diluted earnings per share")
+    diluted_shares = facts_by_label.get("Diluted weighted-average shares")
+    for index, period in enumerate(periods):
+        if (
+            cost_of_revenue is not None
+            and cost_of_revenue[index] is not None
+            and gross_profit is not None
+            and gross_profit[index] is not None
+        ):
+            gross_tolerance = max(1.0, abs(revenue[index].value) * 1e-9)
+            gross_delta = (
+                revenue[index].value
+                - cost_of_revenue[index].value
+                - gross_profit[index].value
+            )
+            if abs(gross_delta) > gross_tolerance:
+                raise RuntimeError(
+                    f"SEC filing {filing.accession_number} has inconsistent gross "
+                    f"profit for {_format_duration_period(period)}."
+                )
+
+        income_tolerance = max(1.0, abs(net_income[index].value) * 2e-3)
+        income_delta = (
+            pretax_income[index].value
+            - income_tax[index].value
+            - net_income[index].value
+        )
+        if abs(income_delta) > income_tolerance:
+            raise RuntimeError(
+                f"SEC filing {filing.accession_number} has inconsistent net income "
+                f"for {_format_duration_period(period)}."
+            )
+
+        if (
+            diluted_eps is not None
+            and diluted_eps[index] is not None
+            and diluted_shares is not None
+            and diluted_shares[index] is not None
+            and abs(net_income[index].value) > 1.0
+        ):
+            estimated_income = (
+                diluted_eps[index].value * diluted_shares[index].value
+            )
+            eps_tolerance = abs(net_income[index].value) * 0.02
+            if abs(estimated_income - net_income[index].value) > eps_tolerance:
+                raise RuntimeError(
+                    f"SEC filing {filing.accession_number} has inconsistent diluted "
+                    f"EPS for {_format_duration_period(period)}."
+                )
+
+    output = io.StringIO()
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(
+        ("line_item", *(_format_duration_period(period) for period in periods))
+    )
+    for label, values in rendered_rows:
+        writer.writerow((label, *values))
+    table = output.getvalue().strip()
+    return "\n".join(
+        (
+            f"Point-in-time income statement for {symbol} as of {as_of_date}.",
+            "Source: SEC EDGAR Company Facts and archived filing package.",
+            (
+                f"Source filing: {filing.form} filed {filing.filing_date.isoformat()}, "
+                f"period ended {filing.report_date.isoformat()}, accession "
+                f"{filing.accession_number}."
+            ),
+            (
+                f"Rows covered: {len(rendered_rows)}. "
+                f"Periods covered: {len(periods)}."
+            ),
+            "Statement values are USD; per-share values and share counts are labeled.",
+            table,
+        )
+    )
+
+
+def _income_statement_periods(
+    company_facts: dict[str, Any], filing: SecFiling
+) -> tuple[DurationPeriod, ...]:
+    revenue_concepts = (
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
+        "Revenues",
+        "SalesRevenueNet",
+    )
+    anchors = [
+        fact
+        for fact in _fact_candidates(
+            company_facts, filing, revenue_concepts, "USD"
+        )
+        if fact.start_date is not None
+    ]
+    current_candidates = [
+        fact
+        for fact in anchors
+        if fact.end_date == filing.report_date
+        and (
+            300 <= (fact.end_date - fact.start_date).days <= 400
+            if filing.form == "10-K"
+            else 60 <= (fact.end_date - fact.start_date).days <= 120
+        )
+    ]
+    if not current_candidates:
+        raise RuntimeError(
+            f"SEC filing {filing.accession_number} has no current income period."
+        )
+    target_days = 365 if filing.form == "10-K" else 91
+    current = min(
+        current_candidates,
+        key=lambda fact: abs((fact.end_date - fact.start_date).days - target_days),
+    )
+    selected_days = (current.end_date - current.start_date).days
+
+    candidates: set[DurationPeriod] = set()
+    for fact in anchors:
+        duration_days = (fact.end_date - fact.start_date).days
+        matching_duration = (
+            300 <= duration_days <= 400
+            if filing.form == "10-K"
+            else abs(duration_days - selected_days) <= 15
+        )
+        if matching_duration:
+            candidates.add(DurationPeriod(fact.start_date, fact.end_date))
+    limit = 3 if filing.form == "10-K" else 2
+    periods = tuple(
+        sorted(
+            candidates,
+            key=lambda period: (period.end_date, period.start_date),
+            reverse=True,
+        )[:limit]
+    )
+    if not periods or periods[0] != DurationPeriod(
+        current.start_date, current.end_date
+    ):
+        raise RuntimeError(
+            f"SEC filing {filing.accession_number} has ambiguous income periods."
+        )
+    return periods
 
 
 def _latest_filing_before(archive: SecArchive, symbol: str, cutoff: date) -> SecFiling:
@@ -1077,13 +1341,14 @@ def _duration_fact_for_period(
     company_facts: dict[str, Any],
     filing: SecFiling,
     concepts: Sequence[str],
-    period: CashFlowPeriod,
+    period: DurationPeriod,
     *,
+    unit: str = "USD",
     required: bool = True,
 ) -> SecFact | None:
     candidates = [
         fact
-        for fact in _fact_candidates(company_facts, filing, concepts, "USD")
+        for fact in _fact_candidates(company_facts, filing, concepts, unit)
         if fact.start_date == period.start_date and fact.end_date == period.end_date
     ]
     if not candidates:
@@ -1091,7 +1356,7 @@ def _duration_fact_for_period(
             return None
         raise RuntimeError(
             f"SEC filing {filing.accession_number} has no usable {concepts[0]} fact "
-            f"for {_format_cash_flow_period(period)}."
+            f"for {_format_duration_period(period)}."
         )
     best_concept = min(concepts.index(fact.concept) for fact in candidates)
     preferred = [
@@ -1101,7 +1366,7 @@ def _duration_fact_for_period(
     if len(values) != 1:
         raise RuntimeError(
             f"SEC filing {filing.accession_number} has conflicting "
-            f"{concepts[best_concept]} facts for {_format_cash_flow_period(period)}."
+            f"{concepts[best_concept]} facts for {_format_duration_period(period)}."
         )
     return preferred[0]
 
