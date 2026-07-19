@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import duckdb
 import pytest
 
@@ -82,6 +84,23 @@ def test_replace_matching_tool_outputs_is_guarded_and_atomic(dataset):
 def test_missing_tool_output_raises(dataset):
     with pytest.raises(KeyError):
         dataset.tool_output("get_news", "AAPL", "2024-01-03")
+
+
+def test_tool_output_supports_concurrent_crew_tool_calls(dataset):
+    dataset.put_tool_output("get_stock_data", "AAPL", "2024-01-03", "STOCK DATA")
+    dataset.put_tool_output("get_indicators", "AAPL", "2024-01-03", "INDICATORS")
+
+    def read_repeatedly(tool_name: str, expected: str) -> None:
+        for _ in range(500):
+            assert dataset.tool_output(tool_name, "AAPL", "2024-01-03") == expected
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = (
+            executor.submit(read_repeatedly, "get_stock_data", "STOCK DATA"),
+            executor.submit(read_repeatedly, "get_indicators", "INDICATORS"),
+        )
+        for future in futures:
+            future.result()
 
 
 def test_close_series_sorted_ascending(dataset):

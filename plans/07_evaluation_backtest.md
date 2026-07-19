@@ -127,7 +127,14 @@ makes the evaluation reproducible and offline (apart from the language-model cal
   calculates CR, and writes Markdown and CSV reports under `output/eval/`. Focused
   tests and the full repository suite pass; the full suite reports 219 passed.
 - [x] (2026-06-11) Added unit tests `tests/test_eval_backtest.py` (10) and `tests/test_eval_dataset.py` (7); all pass, full suite 113 passed with no regressions.
-- [ ] (pending) Build the committed dataset `data/eval_dataset.duckdb` and run a smoke evaluation.
+- [x] (2026-07-19 04:52Z) Ran a real one-day AAPL smoke evaluation through all
+  five LLM stages. The run produced a `Hold` decision for 2024-01-02, CR `+0.00%`,
+  and Markdown/CSV reports under `output/eval/`. The artifact contains 1,891 tool
+  outputs, 364 prices, 918 retained Reddit posts, and 61 benchmark trading days.
+- [x] (2026-07-19 04:52Z) Fixed the concurrent replay-read failure exposed by the
+  smoke run: simultaneous CrewAI tool calls now use independent DuckDB cursors instead
+  of sharing the connection's mutable result set. Added a 1,000-read concurrency
+  regression; focused validation reported 31 passed and the full suite 220 passed.
 - [x] (2026-07-17) Audited all 1,891 prepared tool-output keys, 364 price rows, and
   1,051 raw Reddit rows for missing records, no-data fallbacks, stored HTTP/API errors,
   time bounds, malformed payloads, and suspicious future content. Key coverage is
@@ -291,6 +298,14 @@ future contributor can gauge the rate of progress.
   `requests.post(... timeout=None ...)`; the wrapper now replaces `None` with the
   20-second default, and `tests/test_eval_exa_sources.py::test_exa_timeout_patch_overrides_explicit_none`
   covers the regression.
+- Observation (2026-07-19): CrewAI can issue multiple calls to one task's tools
+  concurrently, while chained `execute(...).fetchone()` calls on one shared DuckDB
+  connection compete for the connection's mutable result set.
+  Evidence: the real AAPL smoke run showed one of two concurrent `get_indicators`
+  calls raise a false missing-row `KeyError` while the other returned the stored row.
+  A two-thread local stress probe reproduced the false `KeyError`; switching
+  `EvalDataset.tool_output()` to a per-call cursor made 1,000 concurrent reads and the
+  full 220-test suite pass.
 
 Add new observations here as they arise, with a short evidence snippet (test output
 is ideal).
@@ -461,6 +476,20 @@ is ideal).
   full dataset is complete. It also avoids treating the Reddit gate as a blocker for
   unrelated tools.
   Date/Author: 2026-06-17 / Codex (user direction)
+
+- Decision: Keep the broad `data/` ignore rule and force-add only the canonical
+  `data/eval_dataset.duckdb` artifact required by Plan 07.
+  Rationale: `data/` also contains large raw provider archives that are build inputs,
+  while the 26 MB prepared DuckDB is the single reproducible replay artifact promised
+  to users. Narrow force-adding avoids accidentally committing the raw corpus.
+  Date/Author: 2026-07-19 / Codex
+
+- Decision: Give each evaluation tool replay lookup its own DuckDB cursor while
+  retaining one read-only dataset connection for the analyst stage.
+  Rationale: DuckDB supports per-thread cursors on a shared connection; this prevents
+  concurrent CrewAI calls from replacing one another's result sets without reopening
+  and revalidating the 26 MB database for every call.
+  Date/Author: 2026-07-19 / Codex
 
 Record every further decision here, with the reasoning, as the plan evolves.
 
@@ -734,6 +763,20 @@ state per run, and writes `evaluation_report.md` plus `evaluation_results.csv` u
 missing price coverage, and leaves normal live analysis unchanged. Focused tests pass,
 `uv run run-eval --help` resolves successfully, Ruff reports no issues in the changed
 Python files, and the full suite reports 219 passed.
+
+Milestone 19 — Committed dataset and smoke evaluation (2026-07-19 04:52Z). The audited
+canonical `data/eval_dataset.duckdb` is now the committed replay artifact. It is
+26,226,688 bytes with SHA-256
+`6249080783024963bc6cc6e9748f03c00fae4d7839e70bfdb36e98a61d14dd26`, and contains
+1,891 recorded tool outputs, 364 prices, 918 raw Reddit posts, and all 61 SPY trading
+days from 2024-01-02 through 2024-03-28. A real
+`uv run run-eval --tickers AAPL --limit-days 1` invocation completed all five stages,
+selected `Hold` at the 2024-01-02 close of 185.64, reported CR `+0.00%`, and wrote the
+expected Markdown and CSV reports. That run also exposed a false missing-row error
+when CrewAI called the indicator tool concurrently; per-call DuckDB cursors and a
+concurrency regression resolved it. Focused tests reported 31 passed and the full suite
+reported 220 passed. The only remaining Plan 07 execution item is the intentionally
+expensive 183-decision full evaluation and recording its three CR values.
 
 
 ## Context and Orientation
@@ -1358,3 +1401,9 @@ Revision Note: 2026-07-18 Added the evaluation-mode analyst injection seam and t
 preserves chronological portfolio lessons in a fresh run-local store, reports per-day
 ratings and CR in Markdown/CSV, and supports bounded smoke runs. The full suite reports
 219 passed; running the LLM-backed smoke evaluation remains the next pending item.
+
+Revision Note: 2026-07-19 Committed the audited canonical DuckDB and completed a real
+one-day AAPL smoke evaluation. The smoke run exposed concurrent CrewAI tool calls
+sharing one DuckDB result set, so replay lookups now use independent cursors and have a
+concurrency regression test. The full suite reports 220 passed; only the full,
+language-model-expensive evaluation remains pending.

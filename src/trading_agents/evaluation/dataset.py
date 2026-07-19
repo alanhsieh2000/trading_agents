@@ -269,13 +269,19 @@ class EvalDataset:
         """Return the recorded payload, or raise if the row is missing.
 
         Evaluation runs must fail loudly on a gap rather than silently feeding
-        empty data into an analyst task.
+        empty data into an analyst task. CrewAI may execute multiple calls to
+        the same task tool concurrently, so each lookup uses its own DuckDB
+        cursor rather than sharing the connection's mutable result set.
         """
-        row = self._conn.execute(
-            "SELECT payload FROM tool_outputs "
-            "WHERE tool_name = ? AND ticker = ? AND as_of_date = ?",
-            [tool_name, ticker.upper(), as_of_date],
-        ).fetchone()
+        cursor = self._conn.cursor()
+        try:
+            row = cursor.execute(
+                "SELECT payload FROM tool_outputs "
+                "WHERE tool_name = ? AND ticker = ? AND as_of_date = ?",
+                [tool_name, ticker.upper(), as_of_date],
+            ).fetchone()
+        finally:
+            cursor.close()
         if row is None:
             raise KeyError(
                 f"No recorded output for tool={tool_name!r} ticker={ticker!r} "
