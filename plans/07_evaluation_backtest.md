@@ -135,6 +135,11 @@ makes the evaluation reproducible and offline (apart from the language-model cal
   smoke run: simultaneous CrewAI tool calls now use independent DuckDB cursors instead
   of sharing the connection's mutable result set. Added a 1,000-read concurrency
   regression; focused validation reported 31 passed and the full suite 220 passed.
+- [x] (2026-07-19 07:26Z) Repeated the real one-day AAPL smoke evaluation with
+  `quick_llm=gemini/gemini-3.1-flash-lite` and
+  `deep_llm=gemini/gemini-3.5-flash`. Added CrewAI's `google-genai` extra required by
+  its native Gemini provider. All five LLM stages completed, producing `Hold` for
+  2024-01-02, CR `+0.00%`, and refreshed Markdown/CSV reports under `output/eval/`.
 - [x] (2026-07-17) Audited all 1,891 prepared tool-output keys, 364 price rows, and
   1,051 raw Reddit rows for missing records, no-data fallbacks, stored HTTP/API errors,
   time bounds, malformed payloads, and suspicious future content. Key coverage is
@@ -306,6 +311,13 @@ future contributor can gauge the rate of progress.
   A two-thread local stress probe reproduced the false `KeyError`; switching
   `EvalDataset.tool_output()` to a per-call cursor made 1,000 concurrent reads and the
   full 220-test suite pass.
+- Observation (2026-07-19): A valid `GEMINI_API_KEY` and Gemini model identifiers are
+  insufficient when CrewAI is installed only with its `tools` extra; agent construction
+  stops before the first LLM request because the native Google Gen AI provider is
+  absent.
+  Evidence: the first Gemini smoke attempt raised `ImportError: Google Gen AI native
+  provider not available`; after `uv add 'crewai[google-genai]>=1.15.4'`, the same
+  command completed all five stages successfully.
 
 Add new observations here as they arise, with a short evidence snippet (test output
 is ideal).
@@ -491,10 +503,26 @@ is ideal).
   and revalidating the 26 MB database for every call.
   Date/Author: 2026-07-19 / Codex
 
+- Decision: Declare CrewAI's `google-genai` extra as a project dependency alongside
+  `tools`.
+  Rationale: The evaluation supports selecting Gemini through the existing quick/deep
+  model settings, and a fresh `uv sync` must install the same native provider that made
+  the verified Gemini smoke run work.
+  Date/Author: 2026-07-19 / Codex
+
 Record every further decision here, with the reasoning, as the plan evolves.
 
 
 ## Outcomes & Retrospective
+
+Milestone 20 — Alternate Gemini-model smoke (2026-07-19 07:26Z). The same bounded
+one-day AAPL scenario used for the original smoke completed through analyst, research,
+trader, risk, and portfolio stages with `gemini/gemini-3.1-flash-lite` for quick agents
+and `gemini/gemini-3.5-flash` for deep agents. It returned `Hold` at the recorded
+2024-01-02 close of 185.6400, so the single-day simulator reported CR `+0.00%`. The
+run established that both requested model identifiers, structured outputs, tool calls,
+and the existing `GEMINI_API_KEY` work with CrewAI 1.15.4 after installing the documented
+`google-genai` extra. The full 61-day, three-ticker evaluation remains pending.
 
 Milestone 1 — Offline foundation (2026-06-11). Delivered the deterministic, no-API-key
 core of the evaluation and verified it end-to-end:
@@ -1407,3 +1435,8 @@ one-day AAPL smoke evaluation. The smoke run exposed concurrent CrewAI tool call
 sharing one DuckDB result set, so replay lookups now use independent cursors and have a
 concurrency regression test. The full suite reports 220 passed; only the full,
 language-model-expensive evaluation remains pending.
+
+Revision Note: 2026-07-19 Added CrewAI's native Google Gen AI dependency and repeated
+the bounded AAPL smoke with the requested Gemini quick/deep settings. Both models
+completed the five-stage pipeline and produced a `Hold` decision with CR `+0.00%`;
+the full 61-day, three-ticker evaluation remains pending.
