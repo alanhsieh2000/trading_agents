@@ -28,6 +28,9 @@ def test_get_settings_uses_code_defaults(monkeypatch):
     assert settings.analyst_stage.lookback_days == 7
     assert settings.research_stage.max_rounds == 1
     assert settings.risk_stage.max_rounds == 1
+    assert settings.evaluation.max_rpm == 15
+    assert settings.evaluation.daily_request_budget == 450
+    assert settings.evaluation.decision_request_reserve == 30
     assert settings.llm == LLMSettings(
         quick_llm="gpt-4o-mini",
         deep_llm="gpt-4o-mini",
@@ -84,6 +87,17 @@ def test_resolve_agent_config_defaults_to_quick_llm(monkeypatch):
     resolved = resolve_agent_config({"role": "role"})
 
     assert resolved["llm"] == "quick-model"
+
+
+def test_resolve_agent_config_disables_generic_retries_in_evaluation(monkeypatch):
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__ENABLED", "true")
+    get_settings.cache_clear()
+    try:
+        resolved = resolve_agent_config({"role": "role", "llm_level": "quick_llm"})
+    finally:
+        get_settings.cache_clear()
+
+    assert resolved["max_retry_limit"] == 0
 
 
 def test_resolve_agent_config_rejects_unknown_llm_level():

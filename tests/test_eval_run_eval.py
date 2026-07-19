@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import csv
+from datetime import UTC, datetime, timedelta
+import json
 
 import pytest
 
 from trading_agents.config import get_settings
 from trading_agents.evaluation.dataset import EvalDataset
-from trading_agents.evaluation.run_eval import StageRunners, run_evaluation
+from trading_agents.evaluation.quota import EvaluationQuotaLimiter
+from trading_agents.evaluation.run_eval import (
+    EvaluationPaused,
+    StageRunners,
+    run_evaluation,
+)
 from trading_agents.schemas import LessonRecord
 
 
@@ -46,8 +53,12 @@ def test_run_evaluation_processes_days_chronologically_and_writes_reports(
         trade_date = inputs["trade_date"]
         observed_pipeline.append(("portfolio", trade_date))
         observed_lesson_counts.append(len(store.load("AAPL").lessons))
-        assert fetch_series("AAPL", trade_date)[-1] == ("2024-01-03", 110.0)
-        assert fetch_series("SPY", trade_date)[-1] == ("2024-01-03", 101.0)
+        expected = {
+            "2024-01-02": (("2024-01-02", 100.0), ("2024-01-02", 100.0)),
+            "2024-01-03": (("2024-01-03", 110.0), ("2024-01-03", 101.0)),
+        }
+        assert fetch_series("AAPL", trade_date)[-1] == expected[trade_date][0]
+        assert fetch_series("SPY", trade_date)[-1] == expected[trade_date][1]
         rating = "Buy" if trade_date == "2024-01-02" else "Hold"
         store.append(
             "AAPL",
@@ -81,6 +92,7 @@ def test_run_evaluation_processes_days_chronologically_and_writes_reports(
 
     markdown = result.markdown_path.read_text(encoding="utf-8")
     assert "language models and can be expensive" in markdown
+    assert "uv run run-eval" in markdown
     assert "| AAPL | +10.00% |" in markdown
     assert "| 2024-01-02 | AAPL | Buy | 100.0000 |" in markdown
 
@@ -89,6 +101,105 @@ def test_run_evaluation_processes_days_chronologically_and_writes_reports(
     assert [row["rating"] for row in rows] == ["Buy", "Hold"]
     assert {row["cumulative_return_pct"] for row in rows} == {"10"}
     assert not list((tmp_path / "output").glob("lessons-*"))
+
+
+def test_run_evaluation_pauses_then_resumes_without_overwriting_final_reports(
+    monkeypatch, tmp_path
+):
+    dataset_path = tmp_path / "eval.duckdb"
+    dates = ["2024-01-02", "2024-01-03", "2024-01-04"]
+    with EvalDataset(dataset_path) as dataset:
+        dataset.put_prices("SPY", [(date, 100 + index) for index, date in enumerate(dates)])
+        dataset.put_prices("AAPL", [(date, 100 + index) for index, date in enumerate(dates)])
+
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    report = output_dir / "evaluation_report.md"
+    csv_path = output_dir / "evaluation_results.csv"
+    report.write_text("old report\n", encoding="utf-8")
+    csv_path.write_text("old csv\n", encoding="utf-8")
+
+    current = [datetime(2026, 7, 19, 8, tzinfo=UTC)]
+    sleeps: list[float] = []
+
+    def now():
+        return current[0]
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        current[0] += timedelta(seconds=seconds)
+
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__ENABLED", "true")
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__DAILY_REQUEST_BUDGET", "2")
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__DECISION_REQUEST_RESERVE", "1")
+    monkeypatch.setenv("TRADING_AGENTS_LLM__QUICK_LLM", "gemini/test")
+    monkeypatch.setenv("TRADING_AGENTS_LLM__DEEP_LLM", "gemini/test")
+    get_settings.cache_clear()
+
+    seen: list[str] = []
+    limiter = EvaluationQuotaLimiter(
+        output_dir / "evaluation_quota.json",
+        models=["gemini/test"],
+        max_rpm=15,
+        daily_budget=2,
+        quota_timezone="America/Los_Angeles",
+        now=now,
+        sleep=sleep,
+    )
+
+    def analyst(inputs):
+        limiter.acquire("gemini/test")
+        seen.append(inputs["trade_date"])
+        return {
+            "market_report": "market",
+            "sentiment_report": "sentiment",
+            "news_report": "news",
+            "fundamentals_report": "fundamentals",
+        }
+
+    try:
+        with pytest.raises(EvaluationPaused) as raised:
+            run_evaluation(
+                dataset_path=dataset_path,
+                tickers=["AAPL"],
+                output_dir=output_dir,
+                runners=_simple_runners(analyst),
+                quota_limiter=limiter,
+            )
+        assert raised.value.completed == 2
+        assert seen == dates[:2]
+        assert report.read_text(encoding="utf-8") == "old report\n"
+        assert csv_path.read_text(encoding="utf-8") == "old csv\n"
+        checkpoint = json.loads(
+            (output_dir / "evaluation_checkpoint.json").read_text(encoding="utf-8")
+        )
+        assert len(checkpoint["decisions"]) == 2
+
+        current[0] += timedelta(days=1)
+        resumed_limiter = EvaluationQuotaLimiter(
+            output_dir / "evaluation_quota.json",
+            models=["gemini/test"],
+            max_rpm=15,
+            daily_budget=2,
+            quota_timezone="America/Los_Angeles",
+            now=now,
+            sleep=sleep,
+        )
+        result = run_evaluation(
+            dataset_path=dataset_path,
+            tickers=["AAPL"],
+            output_dir=output_dir,
+            runners=_simple_runners(analyst),
+            quota_limiter=resumed_limiter,
+        )
+    finally:
+        get_settings.cache_clear()
+
+    assert seen == dates
+    assert len(result.decisions) == 3
+    assert result.sessions == 2
+    assert "old report" not in report.read_text(encoding="utf-8")
+    assert len(list(csv.DictReader(csv_path.open(encoding="utf-8")))) == 3
 
 
 def test_run_evaluation_applies_ticker_and_day_limits(monkeypatch, tmp_path):
@@ -147,6 +258,121 @@ def test_run_evaluation_fails_on_missing_ticker_close(monkeypatch, tmp_path):
             )
     finally:
         get_settings.cache_clear()
+
+
+def test_checkpoint_mismatch_requires_explicit_restart(monkeypatch, tmp_path):
+    dataset_path = tmp_path / "eval.duckdb"
+    prices = [("2024-01-02", 100), ("2024-01-03", 101)]
+    with EvalDataset(dataset_path) as dataset:
+        dataset.put_prices("SPY", prices)
+        dataset.put_prices("AAPL", prices)
+
+    output_dir = tmp_path / "output"
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__ENABLED", "true")
+    get_settings.cache_clear()
+    try:
+        run_evaluation(
+            dataset_path=dataset_path,
+            tickers=["AAPL"],
+            limit_days=1,
+            output_dir=output_dir,
+            runners=_simple_runners(lambda _inputs: {}),
+        )
+        with pytest.raises(ValueError, match="use --restart"):
+            run_evaluation(
+                dataset_path=dataset_path,
+                tickers=["AAPL"],
+                limit_days=2,
+                output_dir=output_dir,
+                runners=_simple_runners(lambda _inputs: {}),
+            )
+        result = run_evaluation(
+            dataset_path=dataset_path,
+            tickers=["AAPL"],
+            limit_days=2,
+            output_dir=output_dir,
+            runners=_simple_runners(lambda _inputs: {}),
+            restart=True,
+        )
+    finally:
+        get_settings.cache_clear()
+
+    assert len(result.decisions) == 2
+    assert (output_dir / "evaluation_quota.json").exists()
+
+
+def test_failed_decision_does_not_commit_its_lesson(monkeypatch, tmp_path):
+    dataset_path = tmp_path / "eval.duckdb"
+    prices = [("2024-01-02", 100), ("2024-01-03", 101)]
+    with EvalDataset(dataset_path) as dataset:
+        dataset.put_prices("SPY", prices)
+        dataset.put_prices("AAPL", prices)
+
+    def portfolio(inputs, *, store, **_kwargs):
+        trade_date = inputs["trade_date"]
+        store.append(
+            "AAPL",
+            LessonRecord(
+                ticker="AAPL", trade_date=trade_date, final_decision="Hold"
+            ),
+        )
+        if trade_date == "2024-01-03":
+            raise RuntimeError("injected failure")
+        return {"final_trade_decision": {"rating": "Hold"}, "lessons": []}
+
+    base = _simple_runners(lambda _inputs: {})
+    runners = StageRunners(
+        base.analyst, base.research, base.trader, base.risk, portfolio
+    )
+    output_dir = tmp_path / "output"
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__ENABLED", "true")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="injected failure"):
+            run_evaluation(
+                dataset_path=dataset_path,
+                tickers=["AAPL"],
+                output_dir=output_dir,
+                runners=runners,
+            )
+    finally:
+        get_settings.cache_clear()
+
+    checkpoint = json.loads(
+        (output_dir / "evaluation_checkpoint.json").read_text(encoding="utf-8")
+    )
+    assert [row["date"] for row in checkpoint["decisions"]] == ["2024-01-02"]
+    assert [row["trade_date"] for row in checkpoint["lessons"]["AAPL"]] == [
+        "2024-01-02"
+    ]
+
+
+def test_mocked_full_evaluation_writes_all_183_decisions(monkeypatch, tmp_path):
+    dataset_path = tmp_path / "eval.duckdb"
+    start = datetime(2024, 1, 2, tzinfo=UTC)
+    dates = [(start + timedelta(days=index)).date().isoformat() for index in range(61)]
+    with EvalDataset(dataset_path) as dataset:
+        dataset.put_prices("SPY", [(date, 100 + index) for index, date in enumerate(dates)])
+        for ticker in ("AAPL", "GOOGL", "AMZN"):
+            dataset.put_prices(
+                ticker, [(date, 100 + index) for index, date in enumerate(dates)]
+            )
+
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__ENABLED", "true")
+    get_settings.cache_clear()
+    try:
+        result = run_evaluation(
+            dataset_path=dataset_path,
+            tickers=["AAPL", "GOOGL", "AMZN"],
+            output_dir=tmp_path / "output",
+            runners=_simple_runners(lambda _inputs: {}),
+        )
+    finally:
+        get_settings.cache_clear()
+
+    assert len(result.decisions) == 183
+    assert result.decisions[0].ticker == "AAPL"
+    assert result.decisions[-1].ticker == "AMZN"
 
 
 def test_run_evaluation_rejects_empty_tickers(tmp_path):

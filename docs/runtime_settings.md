@@ -24,6 +24,19 @@ Centralized runtime settings for the analyst/news/sentiment path live in `tradin
 - `TRADING_AGENTS_SENTIMENT__REDDIT_MIN_SCORE`
 - `TRADING_AGENTS_SENTIMENT__REDDIT_MIN_COMMENTS`
 - `TRADING_AGENTS_SENTIMENT__REDDIT_RECENCY_WINDOW_SECONDS`
+- `TRADING_AGENTS_LLM__QUICK_LLM`
+- `TRADING_AGENTS_LLM__DEEP_LLM`
+- `TRADING_AGENTS_EVALUATION__MAX_RPM`
+- `TRADING_AGENTS_EVALUATION__DAILY_REQUEST_BUDGET`
+- `TRADING_AGENTS_EVALUATION__DECISION_REQUEST_RESERVE`
+- `TRADING_AGENTS_EVALUATION__QUOTA_TIMEZONE`
+- `TRADING_AGENTS_EVALUATION__CHECKPOINT_FILENAME`
+- `TRADING_AGENTS_EVALUATION__QUOTA_LEDGER_FILENAME`
+
+The evaluation defaults to 15 requests per minute and a conservative 450-request
+daily budget. `run-eval` checkpoints each completed decision and automatically
+resumes a compatible run. `run-eval --restart` discards decision progress but
+does not erase the persistent quota ledger.
 
 ## Per-run analyst override allowlist
 

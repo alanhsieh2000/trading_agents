@@ -160,6 +160,45 @@ def test_run_portfolio_stage_updates_reflects_and_retrieves_prior_lessons(
     assert trade_dates == ["2026-05-01", "2026-06-04"]
 
 
+def test_run_portfolio_stage_reflects_each_prior_decision_only_once(
+    monkeypatch, tmp_path
+):
+    store = LessonStore(base_dir=tmp_path)
+    store.append(
+        "NVDA",
+        LessonRecord(
+            ticker="NVDA",
+            trade_date="2026-05-01",
+            final_decision="Buy",
+            reflection="Already reviewed.",
+        ),
+    )
+    store.append(
+        "NVDA",
+        LessonRecord(ticker="NVDA", trade_date="2026-06-04", final_decision="Hold"),
+    )
+    calls = []
+
+    def fake_kickoff(task_name, inputs):
+        calls.append(task_name)
+        assert task_name == "final_decision"
+        return _decision_result("Hold")
+
+    def should_not_fetch(*_args):
+        raise AssertionError("No completed lesson needs another reflection")
+
+    monkeypatch.setattr(portfolio_module, "_kickoff_portfolio_task", fake_kickoff)
+
+    run_portfolio_stage(
+        PORTFOLIO_INPUTS,
+        store=store,
+        fetch_series=should_not_fetch,
+    )
+
+    assert calls == ["final_decision"]
+    assert store.load("NVDA").lessons[0].reflection == "Already reviewed."
+
+
 # --- Malformed-output normalizer behavior -----------------------------------
 
 

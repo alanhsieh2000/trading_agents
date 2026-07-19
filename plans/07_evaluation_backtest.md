@@ -140,6 +140,15 @@ makes the evaluation reproducible and offline (apart from the language-model cal
   `deep_llm=gemini/gemini-3.5-flash`. Added CrewAI's `google-genai` extra required by
   its native Gemini provider. All five LLM stages completed, producing `Hold` for
   2024-01-02, CR `+0.00%`, and refreshed Markdown/CSV reports under `output/eval/`.
+- [x] (2026-07-19 10:17Z) Made the full evaluation quota-safe and resumable for
+  `gemini/gemini-3.1-flash-lite`: added a provider-wide CrewAI LLM hook enforcing
+  15 RPM, a persistent 450-request Pacific-day budget with 50 requests of headroom,
+  atomic per-decision checkpoints, automatic multi-day resume, `--restart`, and
+  atomic final-only Markdown/CSV publication. Evaluation agents disable generic
+  retries so one provider failure cannot consume three calls. Corrected portfolio
+  lessons to reflect each prior decision once using prices available only through
+  the current evaluation date. Focused validation reported 34 passed, Ruff passed,
+  and the full suite reported 229 passed.
 - [x] (2026-07-17) Audited all 1,891 prepared tool-output keys, 364 price rows, and
   1,051 raw Reddit rows for missing records, no-data fallbacks, stored HTTP/API errors,
   time bounds, malformed payloads, and suspicious future content. Key coverage is
@@ -318,6 +327,25 @@ future contributor can gauge the rate of progress.
   Evidence: the first Gemini smoke attempt raised `ImportError: Google Gen AI native
   provider not available`; after `uv add 'crewai[google-genai]>=1.15.4'`, the same
   command completed all five stages successfully.
+- Observation (2026-07-19): The attempted full run could not use
+  `gemini/gemini-3.5-flash` for deep agents under the available free-tier quota.
+  Evidence: the portfolio decision exhausted that model's 20-request daily limit and
+  CrewAI's generic retry path repeated the same 429 three times. The full-run command
+  now selects `gemini/gemini-3.1-flash-lite` for both quick and deep roles; its stated
+  limits are 15 RPM and 500 requests/day.
+- Observation (2026-07-19): The original evaluation lesson path re-reflected every
+  prior record on every later day and returned the complete quarter's price series
+  regardless of the current evaluation date.
+  Evidence: 61 days implied `0+...+60 = 1,830` reflection calls per ticker, or 5,490
+  across the evaluation, and `fetch_series()` ignored its as-of argument. Reflection
+  is now one-time and the evaluation fetcher trims every price series to the current
+  trade date.
+- Observation (2026-07-19): CrewAI's native Gemini provider stores the configured
+  `gemini/gemini-3.1-flash-lite` model as `gemini-3.1-flash-lite` on the runtime LLM
+  object.
+  Evidence: a local provider-construction probe exposed the normalized identifier;
+  the quota limiter now maps both forms to one persistent ledger key and has a focused
+  regression test.
 
 Add new observations here as they arise, with a short evidence snippet (test output
 is ideal).
@@ -510,10 +538,40 @@ is ideal).
   the verified Gemini smoke run work.
   Date/Author: 2026-07-19 / Codex
 
+- Decision: Run the full evaluation as resumable daily sessions with a global 15-RPM
+  limit, a 450-request evaluation budget, a 30-request reserve before starting a new
+  decision, and quota reset at midnight Pacific.
+  Rationale: Gemini quotas apply per project and model. Reserving 50 of the available
+  500 daily requests protects against unobserved project usage, while atomic decision
+  checkpoints make the same command safe to rerun after each reset.
+  Date/Author: 2026-07-19 / Codex
+
+- Decision: Reflect each portfolio lesson once and restrict evaluation return data to
+  prices available through the current evaluation date.
+  Rationale: Repeated reflection consumed thousands of requests and allowed future
+  prices into historical prompts. One-time, point-in-time reflection matches the
+  lesson schema's stated lifecycle and keeps the backtest causal.
+  Date/Author: 2026-07-19 / Codex
+
 Record every further decision here, with the reasoning, as the plan evolves.
 
 
 ## Outcomes & Retrospective
+
+Milestone 21 — Quota-safe multi-day runner (2026-07-19 10:17Z). The evaluation now
+uses one persistent, model-aware request ledger across all short-lived CrewAI crews,
+smooths calls below the configured 15-RPM ceiling, stops before a new decision when
+fewer than 30 of its 450 daily requests remain, and resumes from the next chronological
+ticker/date pair after the Pacific-day reset. Completed decisions and lesson books are
+committed together, incomplete sessions leave the prior final report and CSV untouched,
+and `--restart` discards progress without erasing quota usage. The generated report
+records both LLM identifiers, quota settings, request count, session count, and the
+repeatable command. One-time point-in-time reflection reduces the original 5,490
+reflection calls to at most 180 and removes future-price leakage from the 61-day
+design. Deterministic validation reports
+34 focused tests and 229 repository tests passing, with Ruff clean. The real full
+evaluation remains pending and will use `gemini/gemini-3.1-flash-lite` for both model
+levels.
 
 Milestone 20 — Alternate Gemini-model smoke (2026-07-19 07:26Z). The same bounded
 one-day AAPL scenario used for the original smoke completed through analyst, research,
@@ -1440,3 +1498,11 @@ Revision Note: 2026-07-19 Added CrewAI's native Google Gen AI dependency and rep
 the bounded AAPL smoke with the requested Gemini quick/deep settings. Both models
 completed the five-stage pipeline and produced a `Hold` decision with CR `+0.00%`;
 the full 61-day, three-ticker evaluation remains pending.
+
+Revision Note: 2026-07-19 Added a persistent quota ledger, scoped global LLM hook,
+atomic decision/lesson checkpoint, automatic multi-day resume, and final-only report
+publication for the 15-RPM/500-RPD Gemini constraint. The runner budgets 450 requests
+per Pacific day, reserves 30 before starting a decision, uses Flash Lite for both LLM
+levels, and disables evaluation retries. Portfolio reflection is now one-time and
+point-in-time safe. The full suite reports 229 passed; the real full evaluation remains
+pending.

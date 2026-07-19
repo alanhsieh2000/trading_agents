@@ -131,10 +131,16 @@ def run_portfolio_stage(
     trade_date = prepared["trade_date"]
     benchmark_name = resolve_benchmark(ticker)
 
-    # 1. Update existing records with realized returns and holding days.
+    # 1. Update only prior, unreflected records with realized returns. A lesson is
+    # reflected once, and never for the decision currently being evaluated.
     book = store.load(ticker)
+    pending_records = [
+        record
+        for record in book.lessons
+        if not record.reflection and record.trade_date < trade_date
+    ]
     updated = update_records_with_returns(
-        book.lessons,
+        pending_records,
         benchmark_name,
         fetch_series,
         max_holding_days=max_holding_days,

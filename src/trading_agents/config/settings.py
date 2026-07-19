@@ -5,6 +5,7 @@ from functools import lru_cache
 from typing import Any
 
 from pydantic import BaseModel, Field
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -86,6 +87,24 @@ class EvaluationSettings(BaseModel):
     # Exchange-simulator constants from the README "Backtest" section.
     weight_over: float = Field(default=0.5, ge=0.0, le=1.0)
     weight_under: float = Field(default=0.5, ge=0.0, le=1.0)
+    max_rpm: int = Field(default=15, ge=1)
+    daily_request_budget: int = Field(default=450, ge=1)
+    decision_request_reserve: int = Field(default=30, ge=1)
+    quota_timezone: str = Field(default="America/Los_Angeles", min_length=1)
+    checkpoint_filename: str = Field(
+        default="evaluation_checkpoint.json", min_length=1
+    )
+    quota_ledger_filename: str = Field(
+        default="evaluation_quota.json", min_length=1
+    )
+
+    @model_validator(mode="after")
+    def validate_quota_reserve(self) -> "EvaluationSettings":
+        if self.decision_request_reserve > self.daily_request_budget:
+            raise ValueError(
+                "decision_request_reserve cannot exceed daily_request_budget"
+            )
+        return self
 
 
 class AppSettings(BaseSettings):
@@ -140,6 +159,9 @@ def resolve_agent_config(agent_config: Mapping[str, Any]) -> dict[str, Any]:
         resolved["llm"] = llm_settings.deep_llm
     else:
         raise ValueError(f"Unknown agent llm_level: {llm_level}")
+
+    if get_settings().evaluation.enabled:
+        resolved.setdefault("max_retry_limit", 0)
 
     return resolved
 
