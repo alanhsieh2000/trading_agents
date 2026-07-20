@@ -161,7 +161,11 @@ makes the evaluation reproducible and offline (apart from the language-model cal
   replaced fundamentals and financial statements with point-in-time SEC data; and
   removed future-dated raw Reddit rows. The prepared dataset is ready for smoke
   evaluation.
-- [ ] (pending) Run the full evaluation and record CR per stock in `Outcomes & Retrospective`.
+- [x] (2026-07-20 11:52Z) Completed the full 183-decision evaluation over 61
+  trading days with `gpt-4o-mini` for both LLM levels. The six resumable sessions
+  recorded 3,108 LLM requests and produced CR of `-2.19%` for AAPL, `-0.01%` for
+  GOOGL, and `+5.26%` for AMZN. Final artifacts are
+  `output/eval/evaluation_report.md` and `output/eval/evaluation_results.csv`.
 
 Use timestamps (for example `(2026-06-11 09:00Z)`) when checking items off so a
 future contributor can gauge the rate of progress.
@@ -346,6 +350,11 @@ future contributor can gauge the rate of progress.
   Evidence: a local provider-construction probe exposed the normalized identifier;
   the quota limiter now maps both forms to one persistent ledger key and has a focused
   regression test.
+- Observation (2026-07-20): The completed evaluation averaged approximately 16.98
+  recorded LLM requests per decision, close to the quota-planning estimate of 17.
+  Evidence: the completed checkpoint and report record 3,108 requests for 183
+  decisions across six sessions. The final CSV contains exactly 61 rows for each of
+  AAPL, GOOGL, and AMZN, with dates from 2024-01-02 through 2024-03-28.
 
 Add new observations here as they arise, with a short evidence snippet (test output
 is ideal).
@@ -553,10 +562,42 @@ is ideal).
   lesson schema's stated lifecycle and keeps the backtest causal.
   Date/Author: 2026-07-19 / Codex
 
+- Decision: Continue the existing `gpt-4o-mini` checkpoint for both quick and deep
+  roles instead of discarding its first 25 decisions and restarting with Gemini.
+  Rationale: A missing shell line-continuation character caused the first session to
+  use the configured default model. The user elected to preserve that completed work
+  and finish with `gpt-4o-mini`, whose available 500-RPM and 10,000-RPD quotas were
+  materially higher. Keeping one model pair across all resumed sessions also makes
+  the final 183 decisions internally consistent.
+  Date/Author: 2026-07-20 / Codex (confirmed with the user)
+
 Record every further decision here, with the reasoning, as the plan evolves.
 
 
 ## Outcomes & Retrospective
+
+Milestone 22 — Full evaluation complete (2026-07-20 11:52Z). The final artifacts
+contain all 183 expected decisions: 61 trading days for each of AAPL, GOOGL, and AMZN,
+from 2024-01-02 through 2024-03-28. Six resumable sessions used `gpt-4o-mini` for both
+quick and deep roles and recorded 3,108 LLM requests. The realized results are:
+
+| Ticker | CR | Total profit | Rating distribution |
+| --- | ---: | ---: | --- |
+| AAPL | -2.19% | -8.1200 | 1 Buy, 16 Overweight, 21 Hold, 22 Underweight, 1 Sell |
+| GOOGL | -0.01% | -0.0400 | 1 Buy, 28 Overweight, 21 Hold, 11 Underweight, 0 Sell |
+| AMZN | +5.26% | +15.6950 | 3 Buy, 33 Overweight, 18 Hold, 7 Underweight, 0 Sell |
+
+AMZN was the only clearly profitable evaluation asset and also received the most
+bullish mix, with 36 of 61 decisions rated Buy or Overweight. GOOGL was effectively
+flat despite 29 bullish decisions, while AAPL lost 2.19% amid a predominantly
+Hold/Underweight mix (43 of 61 decisions). Compared with the TradingAgents paper's
+[Table 1](https://arxiv.org/abs/2412.20138), which reports CR of 26.62% for AAPL,
+24.36% for GOOGL, and 23.21% for AMZN, this run was lower by 28.81, 24.37, and 17.95
+percentage points, respectively. This is a qualitative implementation comparison,
+not a claim of exact replication: this repository used its audited point-in-time
+dataset, its documented simulator, and `gpt-4o-mini`, so model behavior and data
+construction differ from the paper. The completed report and row-level evidence are
+in `output/eval/evaluation_report.md` and `output/eval/evaluation_results.csv`.
 
 Milestone 21 — Quota-safe multi-day runner (2026-07-19 10:17Z). The evaluation now
 uses one persistent, model-aware request ledger across all short-lived CrewAI crews,
@@ -569,9 +610,9 @@ records both LLM identifiers, quota settings, request count, session count, and 
 repeatable command. One-time point-in-time reflection reduces the original 5,490
 reflection calls to at most 180 and removes future-price leakage from the 61-day
 design. Deterministic validation reports
-34 focused tests and 229 repository tests passing, with Ruff clean. The real full
-evaluation remains pending and will use `gemini/gemini-3.1-flash-lite` for both model
-levels.
+34 focused tests and 229 repository tests passing, with Ruff clean. This milestone's
+planned Gemini run was superseded by the completed `gpt-4o-mini` evaluation recorded
+in Milestone 22.
 
 Milestone 20 — Alternate Gemini-model smoke (2026-07-19 07:26Z). The same bounded
 one-day AAPL scenario used for the original smoke completed through analyst, research,
@@ -1506,3 +1547,10 @@ per Pacific day, reserves 30 before starting a decision, uses Flash Lite for bot
 levels, and disables evaluation retries. Portfolio reflection is now one-time and
 point-in-time safe. The full suite reports 229 passed; the real full evaluation remains
 pending.
+
+Revision Note: 2026-07-20 Completed the full evaluation from its resumable checkpoint
+using `gpt-4o-mini` for both LLM levels. The six sessions completed all 183 decisions
+with 3,108 recorded LLM requests and produced CR of `-2.19%` for AAPL, `-0.01%` for
+GOOGL, and `+5.26%` for AMZN. Added the final rating distributions, paper Table 1
+comparison, model-selection decision, and artifact locations; Plan 07 now has no
+pending implementation or evaluation item.
