@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import json
 import os
@@ -27,6 +28,34 @@ RPM_SAFETY_SECONDS = 0.25
 class DailyQuotaReached(RuntimeError):
     """Raised before a provider call would exceed the evaluation daily budget."""
 
+    def __init__(self, *, model: str, used: int, budget: int) -> None:
+        self.model = model
+        self.used = used
+        self.budget = budget
+        super().__init__(
+            f"Daily evaluation request budget reached for {model}: "
+            f"{used}/{budget}."
+        )
+
+
+@dataclass(frozen=True)
+class ModelQuota:
+    """Rate and daily-capacity policy for one provider model quota bucket."""
+
+    max_rpm: int
+    daily_budget: int
+    decision_reserve: int
+
+    def __post_init__(self) -> None:
+        if self.max_rpm < 1:
+            raise ValueError("max_rpm must be at least 1")
+        if self.daily_budget < 1:
+            raise ValueError("daily_budget must be at least 1")
+        if self.decision_reserve < 1:
+            raise ValueError("decision_reserve must be at least 1")
+        if self.decision_reserve > self.daily_budget:
+            raise ValueError("decision_reserve cannot exceed daily_budget")
+
 
 class EvaluationQuotaLimiter:
     """Limit and record all evaluation calls for one or more model identifiers."""
@@ -35,22 +64,28 @@ class EvaluationQuotaLimiter:
         self,
         path: str | Path,
         *,
-        models: Iterable[str],
-        max_rpm: int,
-        daily_budget: int,
+        policies: dict[str, ModelQuota],
         quota_timezone: str,
         now: Callable[[], datetime] | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.path = Path(path)
-        self.models = frozenset(str(model).strip() for model in models)
-        self._model_aliases = {
-            alias: model
-            for model in self.models
-            for alias in (model, model.split("/", 1)[-1])
+        self.policies = {
+            str(model).strip(): policy for model, policy in policies.items()
         }
-        self.max_rpm = max_rpm
-        self.daily_budget = daily_budget
+        if not self.policies or any(not model for model in self.policies):
+            raise ValueError("At least one non-empty model quota policy is required")
+        self.models = frozenset(self.policies)
+        self._model_aliases: dict[str, str] = {}
+        for model in self.models:
+            for alias in model_aliases(model):
+                existing = self._model_aliases.get(alias)
+                if existing is not None and existing != model:
+                    raise ValueError(
+                        f"Ambiguous evaluation model alias {alias!r} for "
+                        f"{existing!r} and {model!r}."
+                    )
+                self._model_aliases[alias] = model
         self.quota_timezone = ZoneInfo(quota_timezone)
         self._now = now or (lambda: datetime.now(UTC))
         self._sleep = sleep
@@ -68,22 +103,24 @@ class EvaluationQuotaLimiter:
             with self._lock:
                 now = self._utc_now()
                 state = self._model_state(normalized, now)
+                policy = self.policies[normalized]
                 recent = self._recent_timestamps(state, now)
                 state["request_timestamps"] = [stamp.isoformat() for stamp in recent]
 
-                if int(state["daily_count"]) >= self.daily_budget:
+                if int(state["daily_count"]) >= policy.daily_budget:
                     raise DailyQuotaReached(
-                        f"Daily evaluation request budget reached for {normalized}: "
-                        f"{state['daily_count']}/{self.daily_budget}."
+                        model=normalized,
+                        used=int(state["daily_count"]),
+                        budget=policy.daily_budget,
                     )
 
                 if recent:
-                    smooth_interval = 60.0 / self.max_rpm + RPM_SAFETY_SECONDS
+                    smooth_interval = 60.0 / policy.max_rpm + RPM_SAFETY_SECONDS
                     wait_seconds = max(
                         wait_seconds,
                         smooth_interval - (now - recent[-1]).total_seconds(),
                     )
-                if len(recent) >= self.max_rpm:
+                if len(recent) >= policy.max_rpm:
                     wait_seconds = max(
                         wait_seconds,
                         (recent[0] + RPM_WINDOW - now).total_seconds()
@@ -104,17 +141,23 @@ class EvaluationQuotaLimiter:
 
     def remaining(self, model: str) -> int:
         """Return locally observable daily capacity for ``model``."""
-        normalized = self._canonical_model(model) or str(model).strip()
+        normalized = self._require_model(model)
         with self._lock:
             state = self._model_state(normalized, self._utc_now())
             self._write()
-            return max(0, self.daily_budget - int(state["daily_count"]))
+            return max(
+                0,
+                self.policies[normalized].daily_budget - int(state["daily_count"]),
+            )
 
     def lifetime_count(self, model: str) -> int:
-        normalized = self._canonical_model(model) or str(model).strip()
+        normalized = self._require_model(model)
         with self._lock:
             state = self._model_state(normalized, self._utc_now())
             return int(state["lifetime_count"])
+
+    def policy(self, model: str) -> ModelQuota:
+        return self.policies[self._require_model(model)]
 
     def next_reset(self) -> datetime:
         local_now = self._utc_now().astimezone(self.quota_timezone)
@@ -127,6 +170,12 @@ class EvaluationQuotaLimiter:
 
     def _canonical_model(self, model: str) -> str | None:
         return self._model_aliases.get(str(model).strip())
+
+    def _require_model(self, model: str) -> str:
+        normalized = self._canonical_model(model)
+        if normalized is None:
+            raise KeyError(f"No evaluation quota policy for model {model!r}.")
+        return normalized
 
     def _utc_now(self) -> datetime:
         value = self._now()
@@ -201,3 +250,8 @@ def _context_model(context: Any) -> str:
     llm = getattr(context, "llm", None)
     model = getattr(llm, "model", llm)
     return str(model or "").strip()
+
+
+def model_aliases(model: str) -> frozenset[str]:
+    normalized = str(model).strip()
+    return frozenset((normalized, normalized.split("/", 1)[-1]))

@@ -1,6 +1,10 @@
+import pytest
+from pydantic import ValidationError
+
 from trading_agents.config.settings import (
     ANALYST_INPUT_OVERRIDE_KEYS,
     AnalystRuntimeConfig,
+    EvaluationSettings,
     LLMSettings,
     ResearchStageSettings,
     RiskStageSettings,
@@ -31,6 +35,8 @@ def test_get_settings_uses_code_defaults(monkeypatch):
     assert settings.evaluation.max_rpm == 15
     assert settings.evaluation.daily_request_budget == 450
     assert settings.evaluation.decision_request_reserve == 30
+    assert settings.evaluation.quota_value("quick", "max_rpm") == 15
+    assert settings.evaluation.quota_value("deep", "daily_request_budget") == 450
     assert settings.llm == LLMSettings(
         quick_llm="gpt-4o-mini",
         deep_llm="gpt-4o-mini",
@@ -44,6 +50,10 @@ def test_get_settings_honors_environment_overrides(monkeypatch):
     monkeypatch.setenv("TRADING_AGENTS_RISK_STAGE__MAX_ROUNDS", "3")
     monkeypatch.setenv("TRADING_AGENTS_LLM__QUICK_LLM", "openai/gpt-4o-mini")
     monkeypatch.setenv("TRADING_AGENTS_LLM__DEEP_LLM", "openai/gpt-4o")
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__QUICK_MAX_RPM", "200")
+    monkeypatch.setenv(
+        "TRADING_AGENTS_EVALUATION__DEEP_DAILY_REQUEST_BUDGET", "1200"
+    )
     get_settings.cache_clear()
 
     settings = get_settings()
@@ -56,6 +66,22 @@ def test_get_settings_honors_environment_overrides(monkeypatch):
         quick_llm="openai/gpt-4o-mini",
         deep_llm="openai/gpt-4o",
     )
+    assert settings.evaluation.quota_value("quick", "max_rpm") == 200
+    assert settings.evaluation.quota_value("deep", "max_rpm") == 15
+    assert settings.evaluation.quota_value("quick", "daily_request_budget") == 450
+    assert settings.evaluation.quota_value("deep", "daily_request_budget") == 1200
+
+
+def test_evaluation_settings_validates_each_resolved_role_reserve():
+    with pytest.raises(
+        ValidationError,
+        match="quick_decision_request_reserve cannot exceed "
+        "quick_daily_request_budget",
+    ):
+        EvaluationSettings(
+            quick_daily_request_budget=10,
+            quick_decision_request_reserve=11,
+        )
 
 
 def test_resolve_agent_config_injects_quick_llm(monkeypatch):

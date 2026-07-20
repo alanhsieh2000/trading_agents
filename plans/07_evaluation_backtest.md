@@ -166,6 +166,12 @@ makes the evaluation reproducible and offline (apart from the language-model cal
   recorded 3,108 LLM requests and produced CR of `-2.19%` for AAPL, `-0.01%` for
   GOOGL, and `+5.26%` for AMZN. Final artifacts are
   `output/eval/evaluation_report.md` and `output/eval/evaluation_results.csv`.
+- [x] (2026-07-20 12:28Z) Added independent quick/deep RPM, daily-budget, and
+  per-decision-reserve overrides while retaining the original shared settings as
+  fallbacks. Matching quick/deep models share one quota bucket; mismatched policies
+  for one normalized model fail before evaluation. Reports and pause messages now
+  identify per-model limits and usage. Focused validation reported 27 passed, Ruff
+  passed, and the full suite reported 235 passed.
 
 Use timestamps (for example `(2026-06-11 09:00Z)`) when checking items off so a
 future contributor can gauge the rate of progress.
@@ -355,6 +361,12 @@ future contributor can gauge the rate of progress.
   Evidence: the completed checkpoint and report record 3,108 requests for 183
   decisions across six sessions. The final CSV contains exactly 61 rows for each of
   AAPL, GOOGL, and AMZN, with dates from 2024-01-02 through 2024-03-28.
+- Observation (2026-07-20): The quota ledger already persisted counters separately by
+  model, but the limiter applied one shared RPM, daily budget, and decision reserve to
+  every counter; the runner also paused on the minimum remaining count and attributed
+  the pause to the first configured model. This made distinct quick/deep quotas
+  impossible to express even though CrewAI's hook supplied the concrete model for
+  every call.
 
 Add new observations here as they arise, with a short evidence snippet (test output
 is ideal).
@@ -571,10 +583,32 @@ is ideal).
   the final 183 decisions internally consistent.
   Date/Author: 2026-07-20 / Codex (confirmed with the user)
 
+- Decision: Resolve quota limits independently for quick and deep roles, with the
+  original shared settings retained as per-field fallbacks; merge identical normalized
+  models only when their complete policies match, otherwise fail fast.
+  Rationale: Different models commonly have different RPM and RPD limits, while two
+  roles using the same provider model consume one real quota bucket. Silent duplicate
+  buckets would undercount usage, and silently choosing one role's limits could exceed
+  the provider quota. Separate decision reserves also support low-RPD deep models.
+  Date/Author: 2026-07-20 / Codex (policy confirmed with the user)
+
 Record every further decision here, with the reasoning, as the plan evolves.
 
 
 ## Outcomes & Retrospective
+
+Milestone 23 — Independent quick/deep quotas (2026-07-20 12:28Z). Evaluation settings
+now accept quick/deep overrides for RPM, daily request budget, and decision reserve,
+with the existing shared values used only where an override is absent. The scoped LLM
+hook routes each call to its model's policy and persistent counter. The runner checks
+each distinct model before a decision, reports the exact blocking role/model and quota,
+and records per-model plus aggregate request totals in checkpoints and final reports.
+Identical model aliases share one bucket only under matching policies; different
+policies and ambiguous cross-provider aliases are rejected before any LLM call. The
+ledger and checkpoint versions remain compatible, quota limits may still change
+between resumed sessions, and the generated command now includes all six role-specific
+quota variables. Validation reports 27 focused tests and 235 repository tests passing,
+with Ruff and diff checks clean.
 
 Milestone 22 — Full evaluation complete (2026-07-20 11:52Z). The final artifacts
 contain all 183 expected decisions: 61 trading days for each of AAPL, GOOGL, and AMZN,
@@ -1554,3 +1588,9 @@ with 3,108 recorded LLM requests and produced CR of `-2.19%` for AAPL, `-0.01%` 
 GOOGL, and `+5.26%` for AMZN. Added the final rating distributions, paper Table 1
 comparison, model-selection decision, and artifact locations; Plan 07 now has no
 pending implementation or evaluation item.
+
+Revision Note: 2026-07-20 Replaced the evaluation runner's shared quota policy with
+independent quick/deep RPM, daily-budget, and decision-reserve policies. Legacy shared
+environment variables remain fallbacks, identical models share one validated bucket,
+and pause/checkpoint/report output now exposes the constrained model and per-model
+request totals. The full suite reports 235 passed.

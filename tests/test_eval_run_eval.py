@@ -8,7 +8,7 @@ import pytest
 
 from trading_agents.config import get_settings
 from trading_agents.evaluation.dataset import EvalDataset
-from trading_agents.evaluation.quota import EvaluationQuotaLimiter
+from trading_agents.evaluation.quota import EvaluationQuotaLimiter, ModelQuota
 from trading_agents.evaluation.run_eval import (
     EvaluationPaused,
     StageRunners,
@@ -139,9 +139,7 @@ def test_run_evaluation_pauses_then_resumes_without_overwriting_final_reports(
     seen: list[str] = []
     limiter = EvaluationQuotaLimiter(
         output_dir / "evaluation_quota.json",
-        models=["gemini/test"],
-        max_rpm=15,
-        daily_budget=2,
+        policies={"gemini/test": ModelQuota(15, 2, 1)},
         quota_timezone="America/Los_Angeles",
         now=now,
         sleep=sleep,
@@ -167,6 +165,10 @@ def test_run_evaluation_pauses_then_resumes_without_overwriting_final_reports(
                 quota_limiter=limiter,
             )
         assert raised.value.completed == 2
+        assert raised.value.model == "gemini/test"
+        assert raised.value.roles == ("quick", "deep")
+        assert raised.value.used == 2
+        assert raised.value.budget == 2
         assert seen == dates[:2]
         assert report.read_text(encoding="utf-8") == "old report\n"
         assert csv_path.read_text(encoding="utf-8") == "old csv\n"
@@ -178,9 +180,7 @@ def test_run_evaluation_pauses_then_resumes_without_overwriting_final_reports(
         current[0] += timedelta(days=1)
         resumed_limiter = EvaluationQuotaLimiter(
             output_dir / "evaluation_quota.json",
-            models=["gemini/test"],
-            max_rpm=15,
-            daily_budget=2,
+            policies={"gemini/test": ModelQuota(15, 2, 1)},
             quota_timezone="America/Los_Angeles",
             now=now,
             sleep=sleep,
@@ -200,6 +200,151 @@ def test_run_evaluation_pauses_then_resumes_without_overwriting_final_reports(
     assert result.sessions == 2
     assert "old report" not in report.read_text(encoding="utf-8")
     assert len(list(csv.DictReader(csv_path.open(encoding="utf-8")))) == 3
+
+
+def test_run_evaluation_reports_independent_quick_and_deep_quotas(
+    monkeypatch, tmp_path
+):
+    dataset_path = tmp_path / "eval.duckdb"
+    with EvalDataset(dataset_path) as dataset:
+        dataset.put_prices("SPY", [("2024-01-02", 100)])
+        dataset.put_prices("AAPL", [("2024-01-02", 100)])
+
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__ENABLED", "true")
+    monkeypatch.setenv("TRADING_AGENTS_LLM__QUICK_LLM", "gemini/quick")
+    monkeypatch.setenv("TRADING_AGENTS_LLM__DEEP_LLM", "openai/deep")
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__QUICK_MAX_RPM", "15")
+    monkeypatch.setenv(
+        "TRADING_AGENTS_EVALUATION__QUICK_DAILY_REQUEST_BUDGET", "500"
+    )
+    monkeypatch.setenv(
+        "TRADING_AGENTS_EVALUATION__QUICK_DECISION_REQUEST_RESERVE", "20"
+    )
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__DEEP_MAX_RPM", "300")
+    monkeypatch.setenv(
+        "TRADING_AGENTS_EVALUATION__DEEP_DAILY_REQUEST_BUDGET", "10000"
+    )
+    monkeypatch.setenv(
+        "TRADING_AGENTS_EVALUATION__DEEP_DECISION_REQUEST_RESERVE", "5"
+    )
+    get_settings.cache_clear()
+    try:
+        result = run_evaluation(
+            dataset_path=dataset_path,
+            tickers=["AAPL"],
+            output_dir=tmp_path / "output",
+            runners=_simple_runners(lambda _inputs: {}),
+        )
+    finally:
+        get_settings.cache_clear()
+
+    report = result.markdown_path.read_text(encoding="utf-8")
+    assert "| Quick | `gemini/quick` | 15 | 500 | 20 | 0 |" in report
+    assert "| Deep | `openai/deep` | 300 | 10000 | 5 | 0 |" in report
+    assert "TRADING_AGENTS_EVALUATION__QUICK_MAX_RPM=15" in report
+    assert "TRADING_AGENTS_EVALUATION__DEEP_MAX_RPM=300" in report
+
+
+def test_run_evaluation_pauses_on_constrained_deep_model(monkeypatch, tmp_path):
+    dataset_path = tmp_path / "eval.duckdb"
+    dates = ["2024-01-02", "2024-01-03", "2024-01-04"]
+    with EvalDataset(dataset_path) as dataset:
+        dataset.put_prices("SPY", [(date, 100) for date in dates])
+        dataset.put_prices("AAPL", [(date, 100) for date in dates])
+
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__ENABLED", "true")
+    monkeypatch.setenv("TRADING_AGENTS_LLM__QUICK_LLM", "gemini/quick")
+    monkeypatch.setenv("TRADING_AGENTS_LLM__DEEP_LLM", "openai/deep")
+    monkeypatch.setenv(
+        "TRADING_AGENTS_EVALUATION__QUICK_DAILY_REQUEST_BUDGET", "5"
+    )
+    monkeypatch.setenv(
+        "TRADING_AGENTS_EVALUATION__QUICK_DECISION_REQUEST_RESERVE", "1"
+    )
+    monkeypatch.setenv(
+        "TRADING_AGENTS_EVALUATION__DEEP_DAILY_REQUEST_BUDGET", "2"
+    )
+    monkeypatch.setenv(
+        "TRADING_AGENTS_EVALUATION__DEEP_DECISION_REQUEST_RESERVE", "1"
+    )
+    get_settings.cache_clear()
+
+    current = [datetime(2026, 7, 19, 8, tzinfo=UTC)]
+
+    def now():
+        return current[0]
+
+    def sleep(seconds):
+        current[0] += timedelta(seconds=seconds)
+
+    policies = {
+        "gemini/quick": ModelQuota(15, 5, 1),
+        "openai/deep": ModelQuota(15, 2, 1),
+    }
+    limiter = EvaluationQuotaLimiter(
+        tmp_path / "output" / "evaluation_quota.json",
+        policies=policies,
+        quota_timezone="America/Los_Angeles",
+        now=now,
+        sleep=sleep,
+    )
+
+    def analyst(_inputs):
+        limiter.acquire("gemini/quick")
+        return {}
+
+    def research(_inputs):
+        limiter.acquire("openai/deep")
+        return {"investment_plan": {"plan": "hold"}}
+
+    base = _simple_runners(analyst)
+    runners = StageRunners(
+        analyst, research, base.trader, base.risk, base.portfolio
+    )
+    try:
+        with pytest.raises(EvaluationPaused) as raised:
+            run_evaluation(
+                dataset_path=dataset_path,
+                tickers=["AAPL"],
+                output_dir=tmp_path / "output",
+                runners=runners,
+                quota_limiter=limiter,
+            )
+    finally:
+        get_settings.cache_clear()
+
+    assert raised.value.completed == 2
+    assert raised.value.model == "openai/deep"
+    assert raised.value.roles == ("deep",)
+    assert raised.value.used == 2
+    assert raised.value.budget == 2
+    checkpoint = json.loads(
+        (tmp_path / "output" / "evaluation_checkpoint.json").read_text()
+    )
+    assert checkpoint["llm_requests"] == 4
+    assert checkpoint["llm_requests_by_model"] == {
+        "gemini/quick": 2,
+        "openai/deep": 2,
+    }
+
+
+def test_run_evaluation_rejects_different_limits_for_one_model(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__ENABLED", "true")
+    monkeypatch.setenv("TRADING_AGENTS_LLM__QUICK_LLM", "gemini/shared")
+    monkeypatch.setenv("TRADING_AGENTS_LLM__DEEP_LLM", "shared")
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__QUICK_MAX_RPM", "15")
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__DEEP_MAX_RPM", "60")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="same model quota bucket"):
+            run_evaluation(
+                dataset_path=tmp_path / "missing.duckdb",
+                tickers=["AAPL"],
+                output_dir=tmp_path / "output",
+                runners=_simple_runners(lambda _inputs: {}),
+            )
+    finally:
+        get_settings.cache_clear()
 
 
 def test_run_evaluation_applies_ticker_and_day_limits(monkeypatch, tmp_path):

@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import hashlib
 import json
@@ -21,7 +21,9 @@ from trading_agents.evaluation.dataset import EvalDataset
 from trading_agents.evaluation.quota import (
     DailyQuotaReached,
     EvaluationQuotaLimiter,
+    ModelQuota,
     evaluation_quota_hook,
+    model_aliases,
 )
 from trading_agents.schemas import LessonBook, PortfolioRating
 
@@ -62,7 +64,16 @@ class EvaluationResult:
     markdown_path: Path
     csv_path: Path
     llm_requests: int = 0
+    llm_requests_by_model: dict[str, int] = field(default_factory=dict)
     sessions: int = 1
+
+
+@dataclass(frozen=True)
+class EvaluationQuotaConfig:
+    """Resolved quick/deep roles and their distinct model quota buckets."""
+
+    role_models: dict[str, str]
+    policies: dict[str, ModelQuota]
 
 
 class EvaluationPaused(RuntimeError):
@@ -75,16 +86,21 @@ class EvaluationPaused(RuntimeError):
         total: int,
         used: int,
         budget: int,
+        model: str,
+        roles: tuple[str, ...],
         next_reset: datetime,
     ) -> None:
         self.completed = completed
         self.total = total
         self.used = used
         self.budget = budget
+        self.model = model
+        self.roles = roles
         self.next_reset = next_reset
+        role_label = "/".join(roles) + " LLM"
         super().__init__(
             f"Evaluation paused after {completed}/{total} decisions; "
-            f"daily requests {used}/{budget}."
+            f"{role_label} {model} daily requests {used}/{budget}."
         )
 
 
@@ -104,6 +120,51 @@ def _load_stage_runners() -> StageRunners:
         risk=run_risk_stage,
         portfolio=run_portfolio_stage,
     )
+
+
+def _evaluation_quota_config() -> EvaluationQuotaConfig:
+    settings = get_settings()
+    evaluation = settings.evaluation
+    role_settings = (
+        ("quick", settings.llm.quick_llm),
+        ("deep", settings.llm.deep_llm),
+    )
+    role_models: dict[str, str] = {}
+    policies: dict[str, ModelQuota] = {}
+    aliases_by_model: dict[str, frozenset[str]] = {}
+
+    for role, configured_model in role_settings:
+        model = configured_model.strip()
+        policy = ModelQuota(
+            max_rpm=evaluation.quota_value(role, "max_rpm"),
+            daily_budget=evaluation.quota_value(role, "daily_request_budget"),
+            decision_reserve=evaluation.quota_value(
+                role, "decision_request_reserve"
+            ),
+        )
+        aliases = model_aliases(model)
+        shared_model = next(
+            (
+                existing
+                for existing, existing_aliases in aliases_by_model.items()
+                if aliases & existing_aliases
+            ),
+            None,
+        )
+        if shared_model is not None:
+            if policies[shared_model] != policy:
+                raise ValueError(
+                    "Quick and deep LLMs resolve to the same model quota bucket "
+                    f"({shared_model}) but have different quota settings."
+                )
+            role_models[role] = shared_model
+            continue
+
+        policies[model] = policy
+        aliases_by_model[model] = aliases
+        role_models[role] = model
+
+    return EvaluationQuotaConfig(role_models=role_models, policies=policies)
 
 
 def _evaluation_fingerprint(
@@ -239,42 +300,76 @@ def _point_in_time_fetcher(
     return fetch
 
 
+def _request_deltas(
+    checkpoint: Mapping[str, Any], limiter: EvaluationQuotaLimiter
+) -> dict[str, int]:
+    starts = checkpoint.get("quota_start_counts", {})
+    return {
+        str(model): max(0, limiter.lifetime_count(str(model)) - int(start))
+        for model, start in starts.items()
+    }
+
+
 def _request_delta(
     checkpoint: Mapping[str, Any], limiter: EvaluationQuotaLimiter
 ) -> int:
-    starts = checkpoint.get("quota_start_counts", {})
-    return sum(
-        max(0, limiter.lifetime_count(str(model)) - int(start))
-        for model, start in starts.items()
-    )
+    return sum(_request_deltas(checkpoint, limiter).values())
 
 
 def _paused(
     limiter: EvaluationQuotaLimiter,
     *,
     model: str,
+    quota_config: EvaluationQuotaConfig,
     completed: int,
     total: int,
-    budget: int,
 ) -> EvaluationPaused:
+    policy = limiter.policy(model)
+    roles = tuple(
+        role
+        for role, role_model in quota_config.role_models.items()
+        if role_model == model
+    )
     return EvaluationPaused(
         completed=completed,
         total=total,
-        used=budget - limiter.remaining(model),
-        budget=budget,
+        used=policy.daily_budget - limiter.remaining(model),
+        budget=policy.daily_budget,
+        model=model,
+        roles=roles,
         next_reset=limiter.next_reset(),
     )
 
 
+def _blocking_model(
+    limiter: EvaluationQuotaLimiter, quota_config: EvaluationQuotaConfig
+) -> str | None:
+    capacity = (
+        (
+            limiter.remaining(model) - policy.decision_reserve,
+            model,
+        )
+        for model, policy in quota_config.policies.items()
+    )
+    headroom, model = min(capacity)
+    return model if headroom < 0 else None
+
+
 def _contains_exception(exc: BaseException, expected: type[BaseException]) -> bool:
+    return _find_exception(exc, expected) is not None
+
+
+def _find_exception(
+    exc: BaseException, expected: type[BaseException]
+) -> BaseException | None:
     current: BaseException | None = exc
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         if isinstance(current, expected):
-            return True
+            return current
         seen.add(id(current))
         current = current.__cause__ or current.__context__
-    return False
+    return None
 
 
 def run_evaluation(
@@ -300,14 +395,17 @@ def run_evaluation(
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    models = tuple(dict.fromkeys((settings.llm.quick_llm, settings.llm.deep_llm)))
+    quota_config = _evaluation_quota_config()
+    models = tuple(quota_config.policies)
     if quota_limiter is None:
         quota_limiter = EvaluationQuotaLimiter(
             output_path / evaluation.quota_ledger_filename,
-            models=models,
-            max_rpm=evaluation.max_rpm,
-            daily_budget=evaluation.daily_request_budget,
+            policies=quota_config.policies,
             quota_timezone=evaluation.quota_timezone,
+        )
+    elif quota_limiter.policies != quota_config.policies:
+        raise ValueError(
+            "Injected evaluation quota limiter policies do not match settings."
         )
 
     with EvalDataset(dataset_path, read_only=True) as dataset:
@@ -360,14 +458,14 @@ def run_evaluation(
             _restore_lessons(lesson_store, checkpoint["lessons"])
             with evaluation_quota_hook(quota_limiter):
                 for trade_date, ticker in expected_pairs[len(decisions) :]:
-                    remaining = min(quota_limiter.remaining(model) for model in models)
-                    if remaining < evaluation.decision_request_reserve:
+                    blocking_model = _blocking_model(quota_limiter, quota_config)
+                    if blocking_model is not None:
                         raise _paused(
                             quota_limiter,
-                            model=models[0],
+                            model=blocking_model,
+                            quota_config=quota_config,
                             completed=len(decisions),
                             total=len(expected_pairs),
-                            budget=evaluation.daily_request_budget,
                         )
 
                     print(f"Evaluating {ticker} on {trade_date}")
@@ -382,12 +480,14 @@ def run_evaluation(
                         )
                     except Exception as exc:
                         if _contains_exception(exc, DailyQuotaReached):
+                            quota_error = _find_exception(exc, DailyQuotaReached)
+                            assert isinstance(quota_error, DailyQuotaReached)
                             raise _paused(
                                 quota_limiter,
-                                model=models[0],
+                                model=quota_error.model,
+                                quota_config=quota_config,
                                 completed=len(decisions),
                                 total=len(expected_pairs),
-                                budget=evaluation.daily_request_budget,
                             ) from exc
                         raise
                     close = dict(close_series[ticker])[trade_date]
@@ -408,6 +508,9 @@ def run_evaluation(
                     checkpoint["llm_requests"] = _request_delta(
                         checkpoint, quota_limiter
                     )
+                    checkpoint["llm_requests_by_model"] = _request_deltas(
+                        checkpoint, quota_limiter
+                    )
                     _write_checkpoint(checkpoint_path, checkpoint)
 
     ticker_results = _score_tickers(
@@ -419,6 +522,7 @@ def run_evaluation(
     markdown_path = output_path / "evaluation_report.md"
     csv_path = output_path / "evaluation_results.csv"
     llm_requests = _request_delta(checkpoint, quota_limiter)
+    llm_requests_by_model = _request_deltas(checkpoint, quota_limiter)
     _write_markdown_report(
         markdown_path,
         trading_days=trading_days,
@@ -428,14 +532,15 @@ def run_evaluation(
         end_date=evaluation.end_date,
         quick_llm=settings.llm.quick_llm,
         deep_llm=settings.llm.deep_llm,
-        max_rpm=evaluation.max_rpm,
-        daily_request_budget=evaluation.daily_request_budget,
+        quota_config=quota_config,
         llm_requests=llm_requests,
+        llm_requests_by_model=llm_requests_by_model,
         sessions=int(checkpoint["sessions"]),
     )
     _write_csv_report(csv_path, decisions, ticker_results)
     checkpoint["status"] = "complete"
     checkpoint["llm_requests"] = llm_requests
+    checkpoint["llm_requests_by_model"] = llm_requests_by_model
     _write_checkpoint(checkpoint_path, checkpoint)
 
     return EvaluationResult(
@@ -445,6 +550,7 @@ def run_evaluation(
         markdown_path=markdown_path,
         csv_path=csv_path,
         llm_requests=llm_requests,
+        llm_requests_by_model=llm_requests_by_model,
         sessions=int(checkpoint["sessions"]),
     )
 
@@ -561,11 +667,15 @@ def _write_markdown_report(
     end_date: str,
     quick_llm: str,
     deep_llm: str,
-    max_rpm: int,
-    daily_request_budget: int,
+    quota_config: EvaluationQuotaConfig,
     llm_requests: int,
+    llm_requests_by_model: Mapping[str, int],
     sessions: int,
 ) -> None:
+    quick_model = quota_config.role_models["quick"]
+    deep_model = quota_config.role_models["deep"]
+    quick_quota = quota_config.policies[quick_model]
+    deep_quota = quota_config.policies[deep_model]
     lines = [
         "# TradingAgents Evaluation",
         "",
@@ -576,6 +686,16 @@ def _write_markdown_report(
         "```bash",
         f"TRADING_AGENTS_LLM__QUICK_LLM={quick_llm} \\",
         f"TRADING_AGENTS_LLM__DEEP_LLM={deep_llm} \\",
+        f"TRADING_AGENTS_EVALUATION__QUICK_MAX_RPM={quick_quota.max_rpm} \\",
+        "TRADING_AGENTS_EVALUATION__QUICK_DAILY_REQUEST_BUDGET="
+        f"{quick_quota.daily_budget} \\",
+        "TRADING_AGENTS_EVALUATION__QUICK_DECISION_REQUEST_RESERVE="
+        f"{quick_quota.decision_reserve} \\",
+        f"TRADING_AGENTS_EVALUATION__DEEP_MAX_RPM={deep_quota.max_rpm} \\",
+        "TRADING_AGENTS_EVALUATION__DEEP_DAILY_REQUEST_BUDGET="
+        f"{deep_quota.daily_budget} \\",
+        "TRADING_AGENTS_EVALUATION__DEEP_DECISION_REQUEST_RESERVE="
+        f"{deep_quota.decision_reserve} \\",
         "uv run run-eval",
         "```",
         "",
@@ -583,10 +703,15 @@ def _write_markdown_report(
         "",
         "## Execution",
         "",
-        f"- Quick LLM: `{quick_llm}`",
-        f"- Deep LLM: `{deep_llm}`",
-        f"- Rate limit: {max_rpm} requests/minute",
-        f"- Evaluation daily budget: {daily_request_budget} requests",
+        "| Role | Model | RPM | Daily budget | Decision reserve | Recorded requests |",
+        "| --- | --- | ---: | ---: | ---: | ---: |",
+        f"| Quick | `{quick_llm}` | {quick_quota.max_rpm} | "
+        f"{quick_quota.daily_budget} | {quick_quota.decision_reserve} | "
+        f"{llm_requests_by_model.get(quick_model, 0)} |",
+        f"| Deep | `{deep_llm}` | {deep_quota.max_rpm} | "
+        f"{deep_quota.daily_budget} | {deep_quota.decision_reserve} | "
+        f"{llm_requests_by_model.get(deep_model, 0)} |",
+        "",
         f"- Recorded LLM requests: {llm_requests}",
         f"- Sessions: {sessions}",
         "",
@@ -595,6 +720,12 @@ def _write_markdown_report(
         "| Ticker | CR | Total profit |",
         "| --- | ---: | ---: |",
     ]
+    if quick_model == deep_model:
+        lines.insert(
+            lines.index(f"- Recorded LLM requests: {llm_requests}"),
+            "- Quick and deep roles share one model quota bucket; its request count "
+            "is shown in both rows.",
+        )
     lines.extend(
         f"| {result.ticker} | {result.cumulative_return:+.2f}% | "
         f"{result.total_profit:+.4f} |"
@@ -688,7 +819,7 @@ def main(argv: list[str] | None = None) -> int:
     except EvaluationPaused as paused:
         print(str(paused))
         print(
-            "Run the same command again after the Gemini quota resets at "
+            "Run the same command again after this quota resets at "
             f"{paused.next_reset.isoformat()}."
         )
         return 0

@@ -90,6 +90,12 @@ class EvaluationSettings(BaseModel):
     max_rpm: int = Field(default=15, ge=1)
     daily_request_budget: int = Field(default=450, ge=1)
     decision_request_reserve: int = Field(default=30, ge=1)
+    quick_max_rpm: int | None = Field(default=None, ge=1)
+    quick_daily_request_budget: int | None = Field(default=None, ge=1)
+    quick_decision_request_reserve: int | None = Field(default=None, ge=1)
+    deep_max_rpm: int | None = Field(default=None, ge=1)
+    deep_daily_request_budget: int | None = Field(default=None, ge=1)
+    deep_decision_request_reserve: int | None = Field(default=None, ge=1)
     quota_timezone: str = Field(default="America/Los_Angeles", min_length=1)
     checkpoint_filename: str = Field(
         default="evaluation_checkpoint.json", min_length=1
@@ -100,11 +106,28 @@ class EvaluationSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_quota_reserve(self) -> "EvaluationSettings":
-        if self.decision_request_reserve > self.daily_request_budget:
-            raise ValueError(
-                "decision_request_reserve cannot exceed daily_request_budget"
-            )
+        for level in ("quick", "deep"):
+            reserve = self.quota_value(level, "decision_request_reserve")
+            budget = self.quota_value(level, "daily_request_budget")
+            if reserve > budget:
+                raise ValueError(
+                    f"{level}_decision_request_reserve cannot exceed "
+                    f"{level}_daily_request_budget"
+                )
         return self
+
+    def quota_value(self, level: str, setting: str) -> int:
+        """Resolve a role-specific quota value with the shared value as fallback."""
+        if level not in {"quick", "deep"}:
+            raise ValueError(f"Unknown LLM quota level: {level}")
+        if setting not in {
+            "max_rpm",
+            "daily_request_budget",
+            "decision_request_reserve",
+        }:
+            raise ValueError(f"Unknown LLM quota setting: {setting}")
+        override = getattr(self, f"{level}_{setting}")
+        return int(override if override is not None else getattr(self, setting))
 
 
 class AppSettings(BaseSettings):
