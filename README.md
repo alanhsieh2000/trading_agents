@@ -446,7 +446,7 @@ The output of the flow is the Portfolio Crew's final trade decision: a
 
 # Evaluation
 
-Following the performance comparison presented in the paper, section 6.1 and Table 1, we use the same stocks - AAPL, GOOGL, AMZN, and the same backtest period - from 2024/01/01 to 2024/03/29, for the evaluation data set. The metrics we will use is the cumulative return CR, which is (total trading profits during 2024/01/01 and 2024/03/29) / V_start * 100%. V_start is the close price of the stock on the first Buy decision made, or the close price of the stock on the first Overweight decision made divided by the weight associated with the Overweight decision. We will pick the larger one for V_start. If neither Buy nor Overweight decisions were made during the period, V_start is 1.
+Following the performance comparison presented in the paper, section 6.1 and Table 1, we use the same stocks - AAPL, GOOGL, AMZN, and the same backtest period - from 2024/01/01 to 2024/03/29, for the evaluation data set. The metric we use is cumulative return (CR), calculated from the capital ledger described in the Backtest section.
 
 ## Dataset Preparation
 
@@ -467,7 +467,7 @@ There are 61 transaction days during the backtest period. On each transaction da
 ## Backtest
 
 Decisions made by the TradingAgents are exactly one of: Buy, Overweight, Hold, Underweight, Sell. To simulate the exchange, we follow these rules:
-- The position of the stock ranges from 0 to 1.
+- The position of the stock ranges from 0 to (1 + weight_over).
 - The weight associated with Overweight is the constant weight_over defined in settings with default value 0.5.
 - The weight associated with Underweight is the constant weight_under defined in settings with default value 0.5.
 - The transaction price is the close price of the transaction day.
@@ -483,6 +483,7 @@ Decisions made by the TradingAgents are exactly one of: Buy, Overweight, Hold, U
 - V_start is the minimal capital needed. It is equal to - min(capital of every trade date).
 - At the end of the backtest, there is always an additional Sell decision on the last transaction day to clear the stock position.
 - The cumulative return is equal to (the capital on the last transaction day after clearing the stock position) / V_start * 100%.
+- If V_start is 0 because no capital was deployed, the cumulative return is 0%.
 
 # Installation
 

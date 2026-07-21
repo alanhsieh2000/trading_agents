@@ -53,7 +53,8 @@ class DecisionRecord:
 class TickerEvaluation:
     ticker: str
     cumulative_return: float
-    total_profit: float
+    final_capital: float
+    capital_by_date: dict[str, float]
 
 
 @dataclass(frozen=True)
@@ -620,8 +621,9 @@ def _score_tickers(
         results.append(
             TickerEvaluation(
                 ticker=ticker,
-                cumulative_return=cumulative_return(backtest, weight_over),
-                total_profit=backtest.total_profit,
+                cumulative_return=cumulative_return(backtest),
+                final_capital=backtest.final_capital,
+                capital_by_date={step[0]: step[4] for step in backtest.steps},
             )
         )
     return results
@@ -717,7 +719,7 @@ def _write_markdown_report(
         "",
         "## Summary",
         "",
-        "| Ticker | CR | Total profit |",
+        "| Ticker | CR | Final capital |",
         "| --- | ---: | ---: |",
     ]
     if quick_model == deep_model:
@@ -728,7 +730,7 @@ def _write_markdown_report(
         )
     lines.extend(
         f"| {result.ticker} | {result.cumulative_return:+.2f}% | "
-        f"{result.total_profit:+.4f} |"
+        f"{result.final_capital:+.4f} |"
         for result in ticker_results
     )
     lines.extend(
@@ -753,13 +755,11 @@ def _write_csv_report(
     decisions: Sequence[DecisionRecord],
     ticker_results: Sequence[TickerEvaluation],
 ) -> None:
-    returns = {
-        result.ticker: result.cumulative_return for result in ticker_results
-    }
+    capitals = {result.ticker: result.capital_by_date for result in ticker_results}
     temporary = path.with_name(f".{path.name}.tmp")
     with temporary.open("w", encoding="utf-8", newline="") as file:
         writer = csv.writer(file)
-        writer.writerow(("date", "ticker", "rating", "close", "cumulative_return_pct"))
+        writer.writerow(("date", "ticker", "rating", "close", "capital"))
         for record in decisions:
             writer.writerow(
                 (
@@ -767,7 +767,7 @@ def _write_csv_report(
                     record.ticker,
                     record.rating,
                     f"{record.close:.10g}",
-                    f"{returns[record.ticker]:.10g}",
+                    f"{capitals[record.ticker][record.date]:.10g}",
                 )
             )
     os.replace(temporary, path)

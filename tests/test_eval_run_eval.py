@@ -94,12 +94,14 @@ def test_run_evaluation_processes_days_chronologically_and_writes_reports(
     assert "language models and can be expensive" in markdown
     assert "uv run run-eval" in markdown
     assert "| AAPL | +10.00% |" in markdown
+    assert "| Ticker | CR | Final capital |" in markdown
     assert "| 2024-01-02 | AAPL | Buy | 100.0000 |" in markdown
 
     with result.csv_path.open(encoding="utf-8", newline="") as file:
         rows = list(csv.DictReader(file))
     assert [row["rating"] for row in rows] == ["Buy", "Hold"]
-    assert {row["cumulative_return_pct"] for row in rows} == {"10"}
+    assert list(rows[0]) == ["date", "ticker", "rating", "close", "capital"]
+    assert [row["capital"] for row in rows] == ["-100", "10"]
     assert not list((tmp_path / "output").glob("lessons-*"))
 
 
