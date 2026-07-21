@@ -30,6 +30,7 @@ from trading_agents.schemas import LessonBook, PortfolioRating
 
 StageRunner = Callable[[Mapping[str, Any]], dict[str, Any]]
 PortfolioStageRunner = Callable[..., dict[str, Any]]
+_WEIGHT_MULTIPLIERS = (0.5, 1.0, 1.5)
 
 
 @dataclass(frozen=True)
@@ -50,11 +51,27 @@ class DecisionRecord:
 
 
 @dataclass(frozen=True)
-class TickerEvaluation:
-    ticker: str
+class WeightScenarioEvaluation:
+    scale: float
+    weight_over: float
+    weight_under: float
+    v_start: float
     cumulative_return: float
     final_capital: float
     capital_by_date: dict[str, float]
+
+
+@dataclass(frozen=True)
+class TickerEvaluation:
+    ticker: str
+    scenarios: tuple[WeightScenarioEvaluation, ...]
+
+
+@dataclass(frozen=True)
+class _WeightScenario:
+    scale: float
+    weight_over: float
+    weight_under: float
 
 
 @dataclass(frozen=True)
@@ -391,6 +408,10 @@ def run_evaluation(
         raise RuntimeError("Evaluation mode must be enabled before running evaluation.")
     if limit_days is not None and limit_days < 1:
         raise ValueError("limit_days must be at least 1.")
+    weight_scenarios = _scaled_weight_scenarios(
+        evaluation.weight_over,
+        evaluation.weight_under,
+    )
     if runners is None:
         runners = _load_stage_runners()
 
@@ -517,8 +538,7 @@ def run_evaluation(
     ticker_results = _score_tickers(
         selected_tickers,
         decisions,
-        weight_over=evaluation.weight_over,
-        weight_under=evaluation.weight_under,
+        weight_scenarios=weight_scenarios,
     )
     markdown_path = output_path / "evaluation_report.md"
     csv_path = output_path / "evaluation_results.csv"
@@ -605,28 +625,70 @@ def _score_tickers(
     tickers: Sequence[str],
     decisions: Sequence[DecisionRecord],
     *,
-    weight_over: float,
-    weight_under: float,
+    weight_scenarios: Sequence[_WeightScenario],
 ) -> list[TickerEvaluation]:
     results: list[TickerEvaluation] = []
     for ticker in tickers:
         ticker_decisions = [record for record in decisions if record.ticker == ticker]
         closes = {record.date: record.close for record in ticker_decisions}
-        backtest = simulate_position(
-            [(record.date, record.rating) for record in ticker_decisions],
-            closes,
-            weight_over,
-            weight_under,
-        )
+        simulation_decisions = [
+            (record.date, record.rating) for record in ticker_decisions
+        ]
+        scenarios: list[WeightScenarioEvaluation] = []
+        for scenario in weight_scenarios:
+            backtest = simulate_position(
+                simulation_decisions,
+                closes,
+                scenario.weight_over,
+                scenario.weight_under,
+            )
+            scenarios.append(
+                WeightScenarioEvaluation(
+                    scale=scenario.scale,
+                    weight_over=scenario.weight_over,
+                    weight_under=scenario.weight_under,
+                    v_start=backtest.v_start,
+                    cumulative_return=cumulative_return(backtest),
+                    final_capital=backtest.final_capital,
+                    capital_by_date={step[0]: step[4] for step in backtest.steps},
+                )
+            )
         results.append(
             TickerEvaluation(
                 ticker=ticker,
-                cumulative_return=cumulative_return(backtest),
-                final_capital=backtest.final_capital,
-                capital_by_date={step[0]: step[4] for step in backtest.steps},
+                scenarios=tuple(scenarios),
             )
         )
     return results
+
+
+def _scaled_weight_scenarios(
+    weight_over: float,
+    weight_under: float,
+) -> tuple[_WeightScenario, ...]:
+    scenarios = tuple(
+        _WeightScenario(
+            scale=scale,
+            weight_over=scale * weight_over,
+            weight_under=scale * weight_under,
+        )
+        for scale in _WEIGHT_MULTIPLIERS
+    )
+    invalid = next(
+        (
+            scenario
+            for scenario in scenarios
+            if scenario.weight_over > 1.0 or scenario.weight_under > 1.0
+        ),
+        None,
+    )
+    if invalid is not None:
+        raise ValueError(
+            f"The {invalid.scale:.1f}x evaluation weight pair "
+            f"({invalid.weight_over:g}, {invalid.weight_under:g}) exceeds 1.0. "
+            "Reduce evaluation.weight_over and evaluation.weight_under."
+        )
+    return scenarios
 
 
 def _validate_price_coverage(
@@ -719,8 +781,8 @@ def _write_markdown_report(
         "",
         "## Summary",
         "",
-        "| Ticker | CR | Final capital |",
-        "| --- | ---: | ---: |",
+        "| Ticker | Scale | weight_over | weight_under | V_start | CR | Final capital |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     if quick_model == deep_model:
         lines.insert(
@@ -729,9 +791,12 @@ def _write_markdown_report(
             "is shown in both rows.",
         )
     lines.extend(
-        f"| {result.ticker} | {result.cumulative_return:+.2f}% | "
-        f"{result.final_capital:+.4f} |"
+        f"| {result.ticker} | {scenario.scale:.1f}x | "
+        f"{scenario.weight_over:.4f} | {scenario.weight_under:.4f} | "
+        f"{scenario.v_start:.4f} | {scenario.cumulative_return:+.2f}% | "
+        f"{scenario.final_capital:+.4f} |"
         for result in ticker_results
+        for scenario in result.scenarios
     )
     lines.extend(
         [
@@ -755,11 +820,26 @@ def _write_csv_report(
     decisions: Sequence[DecisionRecord],
     ticker_results: Sequence[TickerEvaluation],
 ) -> None:
-    capitals = {result.ticker: result.capital_by_date for result in ticker_results}
+    capitals = {
+        result.ticker: {
+            scenario.scale: scenario.capital_by_date for scenario in result.scenarios
+        }
+        for result in ticker_results
+    }
     temporary = path.with_name(f".{path.name}.tmp")
     with temporary.open("w", encoding="utf-8", newline="") as file:
         writer = csv.writer(file)
-        writer.writerow(("date", "ticker", "rating", "close", "capital"))
+        writer.writerow(
+            (
+                "date",
+                "ticker",
+                "rating",
+                "close",
+                "capital_0_5x",
+                "capital_1_0x",
+                "capital_1_5x",
+            )
+        )
         for record in decisions:
             writer.writerow(
                 (
@@ -767,7 +847,10 @@ def _write_csv_report(
                     record.ticker,
                     record.rating,
                     f"{record.close:.10g}",
-                    f"{capitals[record.ticker][record.date]:.10g}",
+                    *(
+                        f"{capitals[record.ticker][scale][record.date]:.10g}"
+                        for scale in _WEIGHT_MULTIPLIERS
+                    ),
                 )
             )
     os.replace(temporary, path)
@@ -829,10 +912,13 @@ def main(argv: list[str] | None = None) -> int:
         f"({len(result.trading_days)} trading days)"
     )
     for ticker_result in result.ticker_results:
-        print(
-            f"{ticker_result.ticker:<6} CR = "
-            f"{ticker_result.cumulative_return:+.2f}%"
-        )
+        for scenario in ticker_result.scenarios:
+            print(
+                f"{ticker_result.ticker:<6} {scenario.scale:.1f}x "
+                f"({scenario.weight_over:g}, {scenario.weight_under:g}) "
+                f"V_start = {scenario.v_start:.4f}, "
+                f"CR = {scenario.cumulative_return:+.2f}%"
+            )
     print(f"Reports: {result.markdown_path} and {result.csv_path}")
     return 0
 

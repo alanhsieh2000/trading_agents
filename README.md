@@ -485,6 +485,8 @@ Decisions made by the TradingAgents are exactly one of: Buy, Overweight, Hold, U
 - The cumulative return is equal to (the capital on the last transaction day after clearing the stock position) / V_start * 100%.
 - If V_start is 0 because no capital was deployed, the cumulative return is 0%.
 
+The evaluation replays each ticker's decisions with three weight pairs: 0.5, 1.0, and 1.5 times the configured `(weight_over, weight_under)` pair. The scaled weights must remain at or below 1.0. The summary in `evaluation_report.md` reports the effective pair, V_start, cumulative return, and final capital for every scenario. The decision ledger in `evaluation_results.csv` contains `capital_0_5x`, `capital_1_0x`, and `capital_1_5x` columns for the three simulations.
+
 # Installation
 
 # Customizing

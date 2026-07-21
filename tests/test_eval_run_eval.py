@@ -82,7 +82,15 @@ def test_run_evaluation_processes_days_chronologically_and_writes_reports(
 
     assert result.trading_days == ("2024-01-02", "2024-01-03")
     assert [record.rating for record in result.decisions] == ["Buy", "Hold"]
-    assert result.ticker_results[0].cumulative_return == pytest.approx(10.0)
+    assert [scenario.scale for scenario in result.ticker_results[0].scenarios] == [
+        0.5,
+        1.0,
+        1.5,
+    ]
+    assert [
+        scenario.cumulative_return
+        for scenario in result.ticker_results[0].scenarios
+    ] == pytest.approx([10.0, 10.0, 10.0])
     assert observed_lesson_counts == [0, 1]
     assert observed_pipeline == [
         (stage, date)
@@ -93,16 +101,59 @@ def test_run_evaluation_processes_days_chronologically_and_writes_reports(
     markdown = result.markdown_path.read_text(encoding="utf-8")
     assert "language models and can be expensive" in markdown
     assert "uv run run-eval" in markdown
-    assert "| AAPL | +10.00% |" in markdown
-    assert "| Ticker | CR | Final capital |" in markdown
+    assert "| AAPL | 0.5x | 0.2500 | 0.2500 | 100.0000 | +10.00% | +10.0000 |" in markdown
+    assert "| AAPL | 1.0x | 0.5000 | 0.5000 | 100.0000 | +10.00% | +10.0000 |" in markdown
+    assert "| AAPL | 1.5x | 0.7500 | 0.7500 | 100.0000 | +10.00% | +10.0000 |" in markdown
+    assert (
+        "| Ticker | Scale | weight_over | weight_under | V_start | CR | "
+        "Final capital |" in markdown
+    )
     assert "| 2024-01-02 | AAPL | Buy | 100.0000 |" in markdown
 
     with result.csv_path.open(encoding="utf-8", newline="") as file:
         rows = list(csv.DictReader(file))
     assert [row["rating"] for row in rows] == ["Buy", "Hold"]
-    assert list(rows[0]) == ["date", "ticker", "rating", "close", "capital"]
-    assert [row["capital"] for row in rows] == ["-100", "10"]
+    assert list(rows[0]) == [
+        "date",
+        "ticker",
+        "rating",
+        "close",
+        "capital_0_5x",
+        "capital_1_0x",
+        "capital_1_5x",
+    ]
+    for capital_column in ("capital_0_5x", "capital_1_0x", "capital_1_5x"):
+        assert [row[capital_column] for row in rows] == ["-100", "10"]
     assert not list((tmp_path / "output").glob("lessons-*"))
+
+
+def test_run_evaluation_rejects_scaled_weights_before_agent_execution(
+    monkeypatch, tmp_path
+):
+    called = False
+
+    def analyst(_inputs):
+        nonlocal called
+        called = True
+        return {}
+
+    output_dir = tmp_path / "output"
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__ENABLED", "true")
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__WEIGHT_OVER", "0.7")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(ValueError, match=r"1\.5x evaluation weight pair"):
+            run_evaluation(
+                dataset_path=tmp_path / "not-opened.duckdb",
+                tickers=["AAPL"],
+                output_dir=output_dir,
+                runners=_simple_runners(analyst),
+            )
+    finally:
+        get_settings.cache_clear()
+
+    assert called is False
+    assert not output_dir.exists()
 
 
 def test_run_evaluation_pauses_then_resumes_without_overwriting_final_reports(

@@ -39,6 +39,7 @@ def test_hold_only_has_zero_capital_and_zero_cr():
     result, cr = _cr(decisions, closes)
     assert result.final_capital == 0.0
     assert result.minimum_capital == 0.0
+    assert result.v_start == 0.0
     # No capital was deployed, so CR is defined as 0%.
     assert cr == 0.0
 
@@ -59,6 +60,7 @@ def test_overweight_raises_to_one_plus_weight_and_uses_minimum_capital():
     closes = {"2024-01-02": 100.0, "2024-01-03": 110.0}
     result, cr = _cr(decisions, closes)
     assert math.isclose(result.minimum_capital, -150.0)
+    assert math.isclose(result.v_start, 150.0)
     assert math.isclose(result.final_capital, 15.0)
     assert math.isclose(cr, 10.0)
     assert [step[3] for step in result.steps] == [1.5, 1.5, 0.0]
@@ -105,3 +107,33 @@ def test_empty_decisions_is_zero_cr():
     result = simulate_position([], {}, WEIGHT_OVER, WEIGHT_UNDER)
     assert isinstance(result, BacktestResult)
     assert cumulative_return(result) == 0.0
+
+
+@pytest.mark.parametrize(
+    ("scale", "expected_v_start", "expected_final_capital", "expected_cr"),
+    [
+        (0.5, 150.0, 225.0, 150.0),
+        (1.0, 200.0, 250.0, 125.0),
+        (1.5, 250.0, 275.0, 110.0),
+    ],
+)
+def test_scaled_weight_pairs_produce_distinct_results(
+    scale, expected_v_start, expected_final_capital, expected_cr
+):
+    decisions = [
+        ("2024-01-02", "Buy"),
+        ("2024-01-03", "Overweight"),
+        ("2024-01-04", "Underweight"),
+    ]
+    closes = {"2024-01-02": 100.0, "2024-01-03": 200.0, "2024-01-04": 300.0}
+
+    result = simulate_position(
+        decisions,
+        closes,
+        scale * WEIGHT_OVER,
+        scale * WEIGHT_UNDER,
+    )
+
+    assert result.v_start == pytest.approx(expected_v_start)
+    assert result.final_capital == pytest.approx(expected_final_capital)
+    assert cumulative_return(result) == pytest.approx(expected_cr)

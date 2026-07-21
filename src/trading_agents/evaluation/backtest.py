@@ -34,6 +34,11 @@ class BacktestResult:
     # step, including the forced final Sell (rating ``"Sell*"``).
     steps: list[tuple[str, str, float, float, float]] = field(default_factory=list)
 
+    @property
+    def v_start(self) -> float:
+        """Return the minimum capital required by this simulation."""
+        return -self.minimum_capital
+
 
 def _normalize_rating(rating: object) -> str:
     text = str(getattr(rating, "value", rating)).strip()
@@ -113,7 +118,6 @@ def simulate_position(
 
 def cumulative_return(result: BacktestResult) -> float:
     """Return CR as a percentage, per the README definition of ``V_start``."""
-    v_start = -result.minimum_capital
-    if v_start == 0.0:
+    if result.v_start == 0.0:
         return 0.0
-    return result.final_capital / v_start * 100.0
+    return result.final_capital / result.v_start * 100.0
