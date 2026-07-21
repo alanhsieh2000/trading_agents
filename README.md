@@ -471,15 +471,18 @@ Decisions made by the TradingAgents are exactly one of: Buy, Overweight, Hold, U
 - The weight associated with Overweight is the constant weight_over defined in settings with default value 0.5.
 - The weight associated with Underweight is the constant weight_under defined in settings with default value 0.5.
 - The transaction price is the close price of the transaction day.
-- For Buy decisions, raise the stock position to 1 if the current position is less than 1.
-- For Overweight decisions, raise the stock position to weight_over if the current position is less than weight_over.
+- The initial position is 0.
 - For Hold decisions, remain the current stock position.
-- For Underweight decisions, reduce the stock position to weight_under if the current position is more than weight_under.
-- For Sell decisions, reduce the stock position to 0 if the current position is more than 0.
-- Underweight and Sell decisions will be ignored if the current position is 0.
-- When the stock position is raised, the cost of the position will be updated.
-- When the stock position is reduced, the cumulative profit or loss will be updated.
+- For Buy decisions, raise the stock position to 1 if the current position is less than 1. Otherwise, Buy is equivalent to Hold. 
+- For Overweight decisions, raise the stock position to (1 + weight_over) if the current position is less than (1 + weight_over). Otherwise, Overweight is equivalent to Hold.
+- For Underweight decisions, reduce the stock position to (1 - weight_under) if the current position is more than (1 - weight_under). Otherwise, Underweight is equivalent to Hold.
+- For Sell decisions, reduce the stock position to 0 if the current position is more than 0. Otherwise, Sell is equivalent to Hold.
+- The initial capital is 0.
+- When the stock position is raised, the capital will be decreased by the amount of (raised position) * (transaction price).
+- When the stock position is reduced, the capital will be increased by the amount of (reduced position) * (transaction price). 
+- V_start is the minimal capital needed. It is equal to - min(capital of every trade date).
 - At the end of the backtest, there is always an additional Sell decision on the last transaction day to clear the stock position.
+- The cumulative return is equal to (the capital on the last transaction day after clearing the stock position) / V_start * 100%.
 
 # Installation
 
