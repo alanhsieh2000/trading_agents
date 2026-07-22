@@ -232,6 +232,7 @@ def test_run_portfolio_stage_normalizes_malformed_rating(monkeypatch, tmp_path):
     result = run_portfolio_stage(PORTFOLIO_INPUTS, store=store)
 
     assert result["final_trade_decision"]["rating"] == "Buy"
+    assert type(result["final_trade_decision"]["rating"]) is str
 
 
 # --- Lesson math ------------------------------------------------------------

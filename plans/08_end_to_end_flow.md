@@ -22,13 +22,13 @@ A user should be able to run the project with a trigger payload such as `{"ticke
 - [x] (2026-06-09) Added output persistence for every stage via `save_outputs`.
 - [x] (2026-06-09) Added mocked end-to-end tests in `tests/test_trading_flow.py`.
 - [x] (2026-06-11) Split the evaluation out of this plan into `plans/07_evaluation_backtest.md` (the README CR backtest needs a prepared historical dataset, an evaluation execution mode, an exchange simulator, and an orchestration runner — far more than a YAML screen), then renumbered this flow plan from 07 to 08. This plan no longer owns evaluation.
-- [ ] Run the final smoke tests and record outputs here.
+- [x] (2026-07-22 13:16Z) Ran the final deterministic and live smoke tests. Stage imports succeeded, `tests/test_trading_flow.py` passed, the full suite passed with 239 tests, and the live NVDA 2024-05-24 flow completed all five stages, persisted all nine artifacts, and produced an `Overweight` decision. The live run exposed and prompted fixes for JSON enum serialization and console-script exit status; both regressions are covered by tests.
 - [x] (2026-06-09) Applied the runtime conventions from plans 02 through 06: `load_dotenv()` runs before flow execution in `main.py`, `gpt-4o-mini` stays the default agent LLM in crew YAML (the Portfolio Crew's final decision is the one documented exception, which uses the deep LLM), tools are bound at the task level, and tracing is enabled on the flow.
 
 ## Surprises & Discoveries
 
-- Observation: The current scripts in `pyproject.toml` already point to `trading_agents.main:kickoff`, `plot`, and `run_with_trigger`, so the flow can be replaced without changing script names.
-  Evidence: `[project.scripts]` maps `kickoff`, `run_crew`, `plot`, and `run_with_trigger` to functions in `trading_agents.main`.
+- Observation: The command names in `pyproject.toml` remain stable, while result-returning Python functions need `None`-returning console wrappers.
+  Evidence: Python's generated console script calls `sys.exit(run_with_trigger())`; returning the successful flow-state dictionary printed it as an error and produced exit status 1. `[project.scripts]` now keeps the `kickoff`, `plot`, `run_with_trigger`, and `analyze` command names while mapping result-bearing commands to wrappers in `trading_agents.main` that print JSON and return `None`.
 - Observation: The repository already has evaluation cases for ticker/date scenarios, but no test runner is present yet.
   Evidence: `tests/eval_cases/trading_agent_eval_cases.yaml` contains cases such as `nvda_2024_05_24`, `tsla_2024_04_24`, and `ba_2024_01_08`.
 - Observation: The flow output contract is the Portfolio Crew's structured `PortfolioDecision`, not an `approve`/`reject` gate over the trader plan.
@@ -38,7 +38,11 @@ A user should be able to run the project with a trigger payload such as `{"ticke
 - Observation: Plan 02 established runtime conventions that the final flow must preserve.
   Evidence: The analyst stage now loads `.env` explicitly with `load_dotenv()`, sets the shared analyst agent to `llm: gpt-4o-mini`, enables Crew-level tracing, runs analyst tasks sequentially, assigns tools at the task level, and maps the flow compatibility field `trade_date` to the analyst prompt variable `current_date`.
 - Observation: CrewAI tracing is a Crew/Flow setting, not a Task setting.
-  Evidence: The official CrewAI tracing docs show `Crew(..., tracing=True)` and `Flow(..., tracing=True)`; local CrewAI 1.14.5 exposes `tracing` on `Crew.model_fields` but not on `Task.model_fields`.
+  Evidence: The official CrewAI tracing docs show `Crew(..., tracing=True)` and `Flow(..., tracing=True)`; local CrewAI 1.15.5 exposes `tracing` on `Crew.model_fields` but not on `Task.model_fields`.
+- Observation: Pydantic's default `model_dump()` can leave a `str`-backed enum instance in an untyped dictionary even though equality with its string value succeeds.
+  Evidence: The first live output rendered `PortfolioRating.OVERWEIGHT` in `final_trade_decision.md`. Serializing `PortfolioDecision` and `LessonRecord` with `model_dump(mode="json")` now emits the exact contract value `Overweight`; the portfolio contract test additionally asserts that the rating's concrete type is `str`.
+- Observation: Current social and fundamental provider endpoints do not reconstruct all inputs as of a historical trade date.
+  Evidence: The live 2024-05-24 run retrieved historical prices and indicators but no matching Yahoo news, while StockTwits and financial statements reflected current provider data. The flow handled this without failing and clearly stated the evidence limitations; reproducible historical evaluation remains the separate concern already implemented under Plan 07.
 
 ## Decision Log
 
@@ -69,10 +73,13 @@ A user should be able to run the project with a trigger payload such as `{"ticke
 - Decision: Persist the final decision as `final_trade_decision.md` and the research transcript as `debate_history.md`; drop the planned `portfolio_decision.txt` and `final_output.md`.
   Rationale: With the output contract being a `PortfolioDecision` rather than an approve/reject string, a dedicated `portfolio_decision.txt` and a separate `final_output.md` are redundant. The implemented `save_outputs` writes one markdown artifact per stage.
   Date/Author: 2026-06-09 / Claude
+- Decision: Preserve the result-returning `kickoff()`, `run_with_trigger()`, and `cli()` functions for programmatic callers, and add dedicated console wrappers for project scripts.
+  Rationale: Returning flow state is useful in Python and existing tests rely on it, but console entry points pass return values to `sys.exit`. Thin wrappers print the result as JSON and return `None`, giving successful shell commands exit status 0 without breaking the programmatic interface.
+  Date/Author: 2026-07-22 / Codex
 
 ## Outcomes & Retrospective
 
-The end-to-end `TradingAgentsFlow` is implemented in `src/trading_agents/main.py` with all five stages, per-run persistence via `save_outputs`, and mocked tests in `tests/test_trading_flow.py`. The remaining work is the evaluation runner against `tests/eval_cases/trading_agent_eval_cases.yaml`. The largest plan correction was aligning the output contract with `PROMPTS.md`: the Portfolio Crew now emits a structured `PortfolioDecision` (5-tier rating plus thesis and lesson records), so the earlier `approve`/`reject` → `Hold`/trader-plan mapping and the `final_output` field were dropped. Update this section again after the evaluation runner lands and after a live validation run.
+The end-to-end `TradingAgentsFlow` is complete in `src/trading_agents/main.py` with all five stages, per-run persistence via `save_outputs`, mocked orchestration tests, and a successful live validation for NVDA on 2024-05-24. The final run produced all nine expected artifacts and an `Overweight` portfolio decision. The smoke milestone also hardened the public behavior: portfolio and lesson dictionaries are now JSON-safe, and all result-bearing console scripts exit 0 on success while retaining their programmatic return values. Evaluation is owned and completed separately by `plans/07_evaluation_backtest.md`; no work remains in this plan.
 
 ## Context and Orientation
 
@@ -85,7 +92,7 @@ This plan depends on the prior plans:
 - `plans/05_risk_management_crew.md` for the risk-stage debate helper.
 - `plans/06_portfolio_crew.md` for the final portfolio approval helper.
 
-The current `src/trading_agents/main.py` defines `TradingAgentsState`, a traced `TradingAgentsFlow`, and functions `kickoff`, `plot`, `run_with_trigger`, and `cli` (the `analyze` entry point). The flow now runs all five stages end to end and writes one markdown artifact per stage. The remaining work for this plan is the evaluation checks against `tests/eval_cases/trading_agent_eval_cases.yaml`.
+The current `src/trading_agents/main.py` defines `TradingAgentsState`, a traced `TradingAgentsFlow`, result-returning functions `kickoff`, `run_with_trigger`, and `cli`, and `None`-returning console wrappers used by the project scripts. The flow runs all five stages end to end and writes one markdown artifact per stage. This plan is complete; the historical evaluation is owned by `plans/07_evaluation_backtest.md`.
 
 Definitions:
 
@@ -123,10 +130,10 @@ Second, define `TradingAgentsFlow(Flow[TradingAgentsState])`. Keep the flow stag
 
 Third, update the script functions:
 
-- `kickoff()` should create `TradingAgentsFlow(tracing=True)` and call `kickoff` with default inputs or no inputs.
+- `kickoff()` should create `TradingAgentsFlow(tracing=True)` and call `kickoff` with default inputs or no inputs. The `kickoff` project command should use `kickoff_cli()`, which prints the result and returns `None`.
 - `plot()` should plot `TradingAgentsFlow`.
-- `run_with_trigger()` should keep accepting one JSON command-line argument, validate it, and pass it as `crewai_trigger_payload`.
-- `cli()` (the `analyze` entry point) should accept `--ticker` and `--trade-date`, build a payload, and kick off the flow, defaulting the trade date to the current UTC date.
+- `run_with_trigger()` should keep accepting one JSON command-line argument, validate it, and pass it as `crewai_trigger_payload`; the `run_with_trigger` project command should use `run_with_trigger_cli()` so a successful dictionary result does not become a nonzero process exit.
+- `cli()` should accept `--ticker` and `--trade-date`, build a payload, and kick off the flow, defaulting the trade date to the current UTC date. The `analyze` project command should use `analyze_cli()` for the same exit-status behavior.
 
 Fourth, add persistence helpers. Create a `save_outputs(state: TradingAgentsState)` function that writes one markdown artifact per stage:
 
@@ -180,14 +187,7 @@ Run commands from `/app/trading_agents`.
 
 5. (Evaluation moved to plan 07 — see `plans/07_evaluation_backtest.md`.)
 
-6. Run a no-live-services smoke test with mocked stage helpers, if provided:
-
-       uv run python -m trading_agents.dev_smoke_flow
-
-   Expected output shape:
-
-       Final rating: Buy
-       Output directory: output/NVDA_2024-05-24
+6. Use `tests/test_trading_flow.py` as the no-live-services smoke test. No separate `trading_agents.dev_smoke_flow` module is needed because the focused tests already execute the full orchestration with mocked stage helpers and verify every persisted artifact.
 
 7. Before a live run, confirm `.env` loads the OpenAI key:
 
@@ -217,6 +217,15 @@ Acceptance requires:
 - The flow stores all intermediate artifacts in a per-run output directory.
 - Mocked tests prove the structured `PortfolioDecision` is produced, threaded into state, and persisted.
 - A live run with credentials can execute the full sequence without changing code.
+
+Final acceptance evidence recorded on 2026-07-22:
+
+    stages ok
+    6 passed in tests/test_trading_flow.py
+    239 passed, 110 warnings in the full suite
+    live final rating: Overweight
+    artifact count: 9
+    console wrapper exit: 0
 
 Evaluation (the README cumulative-return backtest) is specified and accepted separately in `plans/07_evaluation_backtest.md`.
 
@@ -287,4 +296,6 @@ Revision Note: 2026-05-26 renumbered this file from plan 04 to plan 07 after spl
 
 Revision Note: 2026-06-11 split the evaluation out of this plan into `plans/07_evaluation_backtest.md` and pushed back this plan's evaluation scope, then renumbered this flow plan from 07 to 08 (renamed `plans/08_end_to_end_flow.md`) so the next-to-implement evaluation carries the active plan number 07. After adding the README `# Evaluation` section, it became clear the cumulative-return backtest (AAPL/GOOGL/AMZN over 2024-Q1) needs a prepared historical dataset (several analyst data sources cannot be queried for a past window), an evaluation execution mode, an exchange simulator, and an orchestration runner — far beyond the single "evaluation checks" bullet this plan carried. This plan now owns only the end-to-end flow; the open evaluation checklist item, the "Sixth, add an evaluation runner …" paragraph, and the `tests/test_eval_cases.py` references were removed and replaced with pointers to plan 07. The qualitative `tests/eval_cases/trading_agent_eval_cases.yaml` screen is orthogonal to the CR backtest and remains unowned.
 
-Revision Note: 2026-06-09 aligned this plan with `PROMPTS.md` (the latest source of truth). Replaced the stale `approve`/`reject` → `Hold`/trader-plan output contract with the Portfolio Crew's structured `PortfolioDecision` (5-tier `PortfolioRating` plus thesis and lesson records); updated the `TradingAgentsState` fields to the implemented dict/list shapes (added `debate_history` and `lessons`, removed `final_output`); renamed the final flow step from `finalize_result` to `save_outputs`; corrected the persisted artifact list (`debate_history.md`, `final_trade_decision.md`; dropped `portfolio_decision.txt` and `final_output.md`); documented the Portfolio Crew's deep-LLM final decision / quick-LLM self-reflection as the one exception to the `gpt-4o-mini` default; and marked the now-implemented Progress items. Remaining open item: the evaluation runner against `tests/eval_cases/trading_agent_eval_cases.yaml`.
+Revision Note: 2026-06-09 aligned this plan with `PROMPTS.md` (the latest source of truth). Replaced the stale `approve`/`reject` → `Hold`/trader-plan output contract with the Portfolio Crew's structured `PortfolioDecision` (5-tier `PortfolioRating` plus thesis and lesson records); updated the `TradingAgentsState` fields to the implemented dict/list shapes (added `debate_history` and `lessons`, removed `final_output`); renamed the final flow step from `finalize_result` to `save_outputs`; corrected the persisted artifact list (`debate_history.md`, `final_trade_decision.md`; dropped `portfolio_decision.txt` and `final_output.md`); documented the Portfolio Crew's deep-LLM final decision / quick-LLM self-reflection as the one exception to the `gpt-4o-mini` default; and marked the now-implemented Progress items.
+
+Revision Note: 2026-07-22 completed the final smoke milestone. Recorded focused, full-suite, and live-run evidence; documented the historical-provider limitations observed in the live run; fixed enum serialization so persisted ratings use exact contract values; added console wrappers so successful project commands exit 0; removed stale claims that evaluation remains in this plan; and marked Plan 08 complete.

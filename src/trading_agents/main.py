@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime
+import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -190,7 +191,6 @@ def plot() -> None:
 
 
 def run_with_trigger() -> Any:
-    import json
     import sys
 
     if len(sys.argv) < 2:
@@ -207,6 +207,24 @@ def run_with_trigger() -> Any:
     except Exception as exc:
         raise Exception(f"An error occurred while running the flow with trigger: {exc}") from exc
 
+
+def kickoff_cli() -> None:
+    """Run the default flow as a console script without leaking its return to sys.exit."""
+    _print_cli_result(kickoff())
+
+
+def run_with_trigger_cli() -> None:
+    """Run a trigger payload as a console script and exit successfully on success."""
+    _print_cli_result(run_with_trigger())
+
+
+def analyze_cli() -> None:
+    """Run the argparse entry point without leaking its return to sys.exit."""
+    _print_cli_result(cli())
+
+
+def _print_cli_result(result: Any) -> None:
+    print(json.dumps(result, indent=2, default=str))
 
 
 def cli(argv: list[str] | None = None) -> Any:

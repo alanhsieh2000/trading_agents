@@ -25,10 +25,10 @@ dependencies = [
 ]
 
 [project.scripts]
-kickoff = "trading_agents.main:kickoff"
+kickoff = "trading_agents.main:kickoff_cli"
 plot = "trading_agents.main:plot"
-run_with_trigger = "trading_agents.main:run_with_trigger"
-analyze = "trading_agents.main:cli"
+run_with_trigger = "trading_agents.main:run_with_trigger_cli"
+analyze = "trading_agents.main:analyze_cli"
 scan-reddit-coverage = "trading_agents.evaluation.reddit_coverage:main"
 scan-stocktwits-coverage = "trading_agents.evaluation.stocktwits_coverage:main"
 build-eval-dataset = "trading_agents.evaluation.build_dataset:main"

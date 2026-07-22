@@ -189,8 +189,8 @@ def run_portfolio_stage(
     )
 
     return {
-        "final_trade_decision": decision.model_dump(),
-        "lessons": [record.model_dump() for record in retrieved],
+        "final_trade_decision": decision.model_dump(mode="json"),
+        "lessons": [record.model_dump(mode="json") for record in retrieved],
     }
 
 

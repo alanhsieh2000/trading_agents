@@ -236,6 +236,20 @@ def test_cli_without_arguments_uses_default_kickoff(monkeypatch):
     assert result == {"default": True}
     assert calls == ["kickoff"]
 
+
+def test_run_with_trigger_cli_prints_result_and_returns_none(monkeypatch, capsys):
+    monkeypatch.setattr(
+        main_module,
+        "run_with_trigger",
+        lambda: {"final_trade_decision": {"rating": "Overweight"}},
+    )
+
+    result = main_module.run_with_trigger_cli()
+
+    assert result is None
+    assert '"rating": "Overweight"' in capsys.readouterr().out
+
+
 def test_invalid_trade_date_stops_before_analyst_stage(monkeypatch):
     called = False
 
