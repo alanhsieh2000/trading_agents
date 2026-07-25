@@ -48,4 +48,4 @@ RUN uv sync --frozen --no-install-project
 ENV PATH="/app/.venv/bin:$PATH"
 
 USER ${USER_NAME}
-# usage: docker run -it --rm -u $(id -u):$(id -g) v $HOME/[project root]:/app/[project root] tag /bin/bash
+# usage: docker run -it --rm -u $(id -u):$(id -g) -v $HOME/[project root]:/app/[project root] tag /bin/bash
