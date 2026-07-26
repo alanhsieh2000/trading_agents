@@ -5,6 +5,10 @@ from datetime import UTC, datetime, timedelta
 import json
 
 import pytest
+from crewai.events.listeners.tracing.utils import (
+    set_suppress_tracing_messages,
+    should_suppress_tracing_messages,
+)
 
 from trading_agents.config import get_settings
 from trading_agents.evaluation.dataset import EvalDataset
@@ -125,6 +129,60 @@ def test_run_evaluation_processes_days_chronologically_and_writes_reports(
     for capital_column in ("capital_0_5x", "capital_1_0x", "capital_1_5x"):
         assert [row[capital_column] for row in rows] == ["-100", "10"]
     assert not list((tmp_path / "output").glob("lessons-*"))
+
+
+def test_run_evaluation_scopes_tracing_message_suppression(monkeypatch, tmp_path):
+    dataset_path = tmp_path / "eval.duckdb"
+    with EvalDataset(dataset_path) as dataset:
+        dataset.put_prices("SPY", [("2024-01-02", 100)])
+        dataset.put_prices("AAPL", [("2024-01-02", 100)])
+
+    observed_suppression: list[bool] = []
+
+    def analyst(_inputs):
+        observed_suppression.append(should_suppress_tracing_messages())
+        return {}
+
+    def failing_analyst(_inputs):
+        observed_suppression.append(should_suppress_tracing_messages())
+        raise RuntimeError("injected tracing-scope failure")
+
+    monkeypatch.setenv("TRADING_AGENTS_EVALUATION__ENABLED", "true")
+    get_settings.cache_clear()
+    previous = should_suppress_tracing_messages()
+    try:
+        set_suppress_tracing_messages(False)
+        run_evaluation(
+            dataset_path=dataset_path,
+            tickers=["AAPL"],
+            output_dir=tmp_path / "success",
+            runners=_simple_runners(analyst),
+        )
+        assert observed_suppression == [True]
+        assert not should_suppress_tracing_messages()
+
+        with pytest.raises(RuntimeError, match="injected tracing-scope failure"):
+            run_evaluation(
+                dataset_path=dataset_path,
+                tickers=["AAPL"],
+                output_dir=tmp_path / "failure",
+                runners=_simple_runners(failing_analyst),
+            )
+        assert observed_suppression == [True, True]
+        assert not should_suppress_tracing_messages()
+
+        set_suppress_tracing_messages(True)
+        run_evaluation(
+            dataset_path=dataset_path,
+            tickers=["AAPL"],
+            output_dir=tmp_path / "already-suppressed",
+            runners=_simple_runners(analyst),
+        )
+        assert observed_suppression == [True, True, True]
+        assert should_suppress_tracing_messages()
+    finally:
+        set_suppress_tracing_messages(previous)
+        get_settings.cache_clear()
 
 
 def test_run_evaluation_rejects_scaled_weights_before_agent_execution(

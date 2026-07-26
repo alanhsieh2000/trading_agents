@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 import hashlib
@@ -13,6 +14,11 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+
+from crewai.events.listeners.tracing.utils import (
+    set_suppress_tracing_messages,
+    should_suppress_tracing_messages,
+)
 
 from trading_agents.config import get_settings
 from trading_agents.crews.portfolio_crew.lesson_store import LessonStore
@@ -390,6 +396,18 @@ def _find_exception(
     return None
 
 
+@contextmanager
+def _suppress_evaluation_tracing_messages():
+    """Suppress trace-viewing prompts only while an evaluation is running."""
+    previous = should_suppress_tracing_messages()
+    set_suppress_tracing_messages(True)
+    try:
+        yield
+    finally:
+        set_suppress_tracing_messages(previous)
+
+
+@_suppress_evaluation_tracing_messages()
 def run_evaluation(
     *,
     dataset_path: str | Path,
